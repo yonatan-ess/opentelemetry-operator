@@ -47,7 +47,10 @@ func (s *consistentHashingStrategy) GetName() string {
 }
 
 func (s *consistentHashingStrategy) GetCollectorForTarget(collectors map[string]*Collector, item *target.Item) (*Collector, error) {
-	hashKey := item.TargetURL
+	// This fork keys on the full target identity (Item.Hash(): relabeled label
+	// set + job name) instead of __address__ only, so endpoints sharing a
+	// host:port but differing by path, params, or labels spread across collectors.
+	hashKey := item.Hash().String()
 	member := s.consistentHasher.LocateKey([]byte(hashKey))
 	collectorName := member.String()
 	collector, ok := collectors[collectorName]
