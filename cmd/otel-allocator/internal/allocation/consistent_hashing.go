@@ -5,14 +5,22 @@ package allocation
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/buraksezer/consistent"
 	"github.com/cespare/xxhash/v2"
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/model/labels"
 
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/target"
 )
 
 const consistentHashingStrategyName = "consistent-hashing"
+
+// endpointKeySeparator delimits the components of the scrape-URL hash key. It
+// matches the separator Prometheus uses for label hashing and won't appear in
+// label names.
+const endpointKeySeparator = '\xff'
 
 type hasher struct{}
 
@@ -47,11 +55,12 @@ func (s *consistentHashingStrategy) GetName() string {
 }
 
 func (s *consistentHashingStrategy) GetCollectorForTarget(collectors map[string]*Collector, item *target.Item) (*Collector, error) {
-	// This fork keys on the full target identity (Item.Hash(): relabeled label
-	// set + job name) instead of __address__ only, so endpoints sharing a
-	// host:port but differing by path, params, or labels spread across collectors.
-	hashKey := item.Hash().String()
-	member := s.consistentHasher.LocateKey([]byte(hashKey))
+	// This fork keys on the target's scrape URL (address, scheme, metrics path,
+	// and query params) instead of __address__ only, so endpoints sharing a
+	// host:port but differing by path or params spread across collectors. Only
+	// the URL labels are hashed, so changes to other, mutable labels (instance
+	// metadata, service-discovery annotations, etc.) do not move a target.
+	member := s.consistentHasher.LocateKey([]byte(endpointHashKey(item)))
 	collectorName := member.String()
 	collector, ok := collectors[collectorName]
 	if !ok {
@@ -77,3 +86,26 @@ func (s *consistentHashingStrategy) SetCollectors(collectors map[string]*Collect
 }
 
 func (s *consistentHashingStrategy) SetFallbackStrategy(fallbackStrategy Strategy) {}
+
+// endpointHashKey builds a stable key from the parts that make up a target's
+// scrape URL: its address (item.TargetURL, the same value the address-only
+// strategy hashes), scheme, metrics path, and query params. Labels are read in
+// their (sorted) order, so the key is deterministic for a given endpoint.
+func endpointHashKey(item *target.Item) string {
+	ls := item.Labels
+	var sb strings.Builder
+	sb.WriteString(item.TargetURL)
+	sb.WriteByte(endpointKeySeparator)
+	sb.WriteString(ls.Get(model.SchemeLabel))
+	sb.WriteByte(endpointKeySeparator)
+	sb.WriteString(ls.Get(model.MetricsPathLabel))
+	ls.Range(func(l labels.Label) {
+		if strings.HasPrefix(l.Name, model.ParamLabelPrefix) {
+			sb.WriteByte(endpointKeySeparator)
+			sb.WriteString(l.Name)
+			sb.WriteByte('=')
+			sb.WriteString(l.Value)
+		}
+	})
+	return sb.String()
+}
