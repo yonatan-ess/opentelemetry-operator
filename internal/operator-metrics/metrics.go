@@ -5,6 +5,7 @@ package operatormetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
@@ -31,7 +33,7 @@ var (
 	// prometheusCAFile declares the path for prometheus CA file for service monitors in OpenShift.
 	prometheusCAFile = fmt.Sprintf("/etc/prometheus/configmaps/%s/service-ca.crt", caBundleConfigMap)
 
-	// nolint #nosec
+	//nolint:gosec
 	// bearerTokenFile declares the path for bearer token file for service monitors.
 	bearerTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
@@ -67,7 +69,7 @@ func (om operatorMetrics) Start(ctx context.Context) error {
 	return nil
 }
 
-func (om operatorMetrics) NeedLeaderElection() bool {
+func (operatorMetrics) NeedLeaderElection() bool {
 	return true
 }
 
@@ -96,7 +98,7 @@ func (om operatorMetrics) getOwnerReferences(ctx context.Context, namespace stri
 	}
 
 	if len(deploymentList.Items) == 0 {
-		return metav1.OwnerReference{}, fmt.Errorf("no deployments found with the specified label")
+		return metav1.OwnerReference{}, errors.New("no deployments found with the specified label")
 	}
 	deployment := &deploymentList.Items[0]
 
@@ -128,7 +130,9 @@ func (om operatorMetrics) createOperatorMetricsServiceMonitor(ctx context.Contex
 		serviceName := fmt.Sprintf("opentelemetry-operator-controller-manager-metrics-service.%s.svc", namespace)
 
 		tlsConfig = &monitoringv1.TLSConfig{
-			CAFile: prometheusCAFile,
+			TLSFilesConfig: monitoringv1.TLSFilesConfig{
+				CAFile: prometheusCAFile,
+			},
 			SafeTLSConfig: monitoringv1.SafeTLSConfig{
 				ServerName: &serviceName,
 			},
@@ -137,7 +141,7 @@ func (om operatorMetrics) createOperatorMetricsServiceMonitor(ctx context.Contex
 		t := true
 		tlsConfig = &monitoringv1.TLSConfig{
 			SafeTLSConfig: monitoringv1.SafeTLSConfig{
-				// kube-rbac-proxy uses a self-signed cert by default
+				// metrics server uses auto-generated self-signed cert when no certificate is provided
 				InsecureSkipVerify: &t,
 			},
 		}
@@ -165,10 +169,14 @@ func (om operatorMetrics) createOperatorMetricsServiceMonitor(ctx context.Contex
 					BearerTokenFile: bearerTokenFile,
 					Interval:        "30s",
 					Path:            "/metrics",
-					Scheme:          "https",
+					Scheme:          ptr.To(monitoringv1.Scheme("https")),
 					ScrapeTimeout:   "10s",
 					TargetPort:      &intstr.IntOrString{IntVal: 8443},
-					TLSConfig:       tlsConfig,
+					HTTPConfigWithProxyAndTLSFiles: monitoringv1.HTTPConfigWithProxyAndTLSFiles{
+						HTTPConfigWithTLSFiles: monitoringv1.HTTPConfigWithTLSFiles{
+							TLSConfig: tlsConfig,
+						},
+					},
 				},
 			},
 		},

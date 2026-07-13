@@ -5,6 +5,7 @@ package collector
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -15,6 +16,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests/manifestutils"
 	"github.com/open-telemetry/opentelemetry-operator/internal/naming"
+	"github.com/open-telemetry/opentelemetry-operator/internal/otelconfig"
 )
 
 // headless and monitoring labels are to differentiate the base/headless/monitoring services from the clusterIP service.
@@ -52,9 +54,7 @@ func HeadlessService(params manifests.Params) (*corev1.Service, error) {
 	annotations := map[string]string{
 		"service.beta.openshift.io/serving-cert-secret-name": fmt.Sprintf("%s-tls", h.Name),
 	}
-	for k, v := range h.Annotations {
-		annotations[k] = v
-	}
+	maps.Copy(annotations, h.Annotations)
 	h.Annotations = annotations
 
 	h.Spec.ClusterIP = "None"
@@ -72,7 +72,7 @@ func MonitoringService(params manifests.Params) (*corev1.Service, error) {
 		return nil, err
 	}
 
-	_, metricsPort, err := params.OtelCol.Spec.Config.Service.MetricsEndpoint(params.Log)
+	_, metricsPort, err := otelconfig.MetricsEndpoint(&params.OtelCol.Spec.Config.Service, params.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func ExtensionService(params manifests.Params) (*corev1.Service, error) {
 		return nil, err
 	}
 
-	ports, err := params.OtelCol.Spec.Config.GetExtensionPorts(params.Log)
+	ports, err := otelconfig.GetExtensionPorts(&params.OtelCol.Spec.Config, params.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func Service(params manifests.Params) (*corev1.Service, error) {
 		return nil, err
 	}
 
-	ports, err := params.OtelCol.Spec.Config.GetReceiverAndExporterPorts(params.Log)
+	ports, err := otelconfig.GetReceiverAndExporterPorts(&params.OtelCol.Spec.Config, params.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,6 @@ func Service(params manifests.Params) (*corev1.Service, error) {
 
 	// if we have no ports, we don't need a service
 	if len(ports) == 0 {
-
 		params.Log.V(1).Info("the instance's configuration didn't yield any ports to open, skipping service", "instance.name", params.OtelCol.Name, "instance.namespace", params.OtelCol.Namespace)
 		return nil, err
 	}
@@ -255,10 +254,9 @@ func filterPort(logger logr.Logger, candidate corev1.ServicePort, portNumbers ma
 	return &candidate
 }
 
-func extractPortNumbersAndNames(ports []v1beta1.PortsSpec) (map[PortNumberKey]bool, map[string]bool) {
-	numbers := map[PortNumberKey]bool{}
-	names := map[string]bool{}
-
+func extractPortNumbersAndNames(ports []v1beta1.PortsSpec) (numbers map[PortNumberKey]bool, names map[string]bool) {
+	numbers = map[PortNumberKey]bool{}
+	names = map[string]bool{}
 	for _, port := range ports {
 		numbers[newPortNumberKey(port.Port, port.Protocol)] = true
 		names[port.Name] = true

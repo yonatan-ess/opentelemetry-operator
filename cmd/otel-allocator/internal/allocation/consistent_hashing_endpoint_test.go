@@ -20,27 +20,31 @@ func TestConsistentHashingSpreadsSameAddress(t *testing.T) {
 	cols := MakeNCollectors(10, 0)
 
 	mkItems := func() []*target.Item {
+		groupA0Labels := labels.FromMap(map[string]string{
+			"__address__":       addr,
+			"__metrics_path__":  "/metrics/group_a",
+			"__param_shard":     "0",
+			"scrape_group_name": "group-a",
+		})
+		groupA1Labels := labels.FromMap(map[string]string{
+			"__address__":       addr,
+			"__metrics_path__":  "/metrics/group_a",
+			"__param_shard":     "1",
+			"scrape_group_name": "group-a",
+		})
+		groupBHFLabels := labels.FromMap(map[string]string{
+			"__address__":      addr,
+			"__metrics_path__": "/metrics/group_b_hf",
+		})
+		groupBLFLabels := labels.FromMap(map[string]string{
+			"__address__":      addr,
+			"__metrics_path__": "/metrics/group_b_lf",
+		})
 		return []*target.Item{
-			target.NewItem("group-a-0", addr, labels.FromMap(map[string]string{
-				"__address__":       addr,
-				"__metrics_path__":  "/metrics/group_a",
-				"__param_shard":     "0",
-				"scrape_group_name": "group-a",
-			}), ""),
-			target.NewItem("group-a-1", addr, labels.FromMap(map[string]string{
-				"__address__":       addr,
-				"__metrics_path__":  "/metrics/group_a",
-				"__param_shard":     "1",
-				"scrape_group_name": "group-a",
-			}), ""),
-			target.NewItem("group-b-hf", addr, labels.FromMap(map[string]string{
-				"__address__":      addr,
-				"__metrics_path__": "/metrics/group_b_hf",
-			}), ""),
-			target.NewItem("group-b-lf", addr, labels.FromMap(map[string]string{
-				"__address__":      addr,
-				"__metrics_path__": "/metrics/group_b_lf",
-			}), ""),
+			target.NewItem("group-a-0", addr, groupA0Labels, "", target.HashLabels(groupA0Labels, "group-a-0")),
+			target.NewItem("group-a-1", addr, groupA1Labels, "", target.HashLabels(groupA1Labels, "group-a-1")),
+			target.NewItem("group-b-hf", addr, groupBHFLabels, "", target.HashLabels(groupBHFLabels, "group-b-hf")),
+			target.NewItem("group-b-lf", addr, groupBLFLabels, "", target.HashLabels(groupBLFLabels, "group-b-lf")),
 		}
 	}
 
@@ -74,7 +78,8 @@ func TestConsistentHashingIgnoresNonURLLabels(t *testing.T) {
 			ls[k] = v
 		}
 		ls[name] = value
-		return target.NewItem("job", addr, labels.FromMap(ls), "")
+		itemLabels := labels.FromMap(ls)
+		return target.NewItem("job", addr, itemLabels, "", target.HashLabels(itemLabels, "job"))
 	}
 
 	s := newConsistentHashingStrategy().(*consistentHashingStrategy)

@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   creationTimestamp: null
   labels:
     app.kubernetes.io/name: opentelemetry-operator
@@ -78,6 +78,23 @@ spec:
                               - fieldPath
                               type: object
                               x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
                             resourceFieldRef:
                               properties:
                                 containerName:
@@ -113,6 +130,8 @@ spec:
                       type: object
                     type: array
                   configPath:
+                    maxLength: 256
+                    pattern: ^[A-Za-z0-9._/-]*$
                     type: string
                   env:
                     items:
@@ -144,6 +163,23 @@ spec:
                                   type: string
                               required:
                               - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -375,6 +411,23 @@ spec:
                               - fieldPath
                               type: object
                               x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
                             resourceFieldRef:
                               properties:
                                 containerName:
@@ -595,6 +648,23 @@ spec:
                           - fieldPath
                           type: object
                           x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          properties:
+                            key:
+                              type: string
+                            optional:
+                              default: false
+                              type: boolean
+                            path:
+                              type: string
+                            volumeName:
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
                         resourceFieldRef:
                           properties:
                             containerName:
@@ -681,6 +751,23 @@ spec:
                               - fieldPath
                               type: object
                               x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
                             resourceFieldRef:
                               properties:
                                 containerName:
@@ -748,6 +835,78 @@ spec:
                           - type: string
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
+                        type: object
+                    type: object
+                  securityContext:
+                    properties:
+                      allowPrivilegeEscalation:
+                        type: boolean
+                      appArmorProfile:
+                        properties:
+                          localhostProfile:
+                            type: string
+                          type:
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      capabilities:
+                        properties:
+                          add:
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          drop:
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
+                      privileged:
+                        type: boolean
+                      procMount:
+                        type: string
+                      readOnlyRootFilesystem:
+                        type: boolean
+                      runAsGroup:
+                        format: int64
+                        type: integer
+                      runAsNonRoot:
+                        type: boolean
+                      runAsUser:
+                        format: int64
+                        type: integer
+                      seLinuxOptions:
+                        properties:
+                          level:
+                            type: string
+                          role:
+                            type: string
+                          type:
+                            type: string
+                          user:
+                            type: string
+                        type: object
+                      seccompProfile:
+                        properties:
+                          localhostProfile:
+                            type: string
+                          type:
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      windowsOptions:
+                        properties:
+                          gmsaCredentialSpec:
+                            type: string
+                          gmsaCredentialSpecName:
+                            type: string
+                          hostProcess:
+                            type: boolean
+                          runAsUserName:
+                            type: string
                         type: object
                     type: object
                   volumeClaimTemplate:
@@ -871,6 +1030,78 @@ spec:
                 type: object
               imagePullPolicy:
                 type: string
+              initContainerSecurityContext:
+                properties:
+                  allowPrivilegeEscalation:
+                    type: boolean
+                  appArmorProfile:
+                    properties:
+                      localhostProfile:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                    - type
+                    type: object
+                  capabilities:
+                    properties:
+                      add:
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      drop:
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    type: object
+                  privileged:
+                    type: boolean
+                  procMount:
+                    type: string
+                  readOnlyRootFilesystem:
+                    type: boolean
+                  runAsGroup:
+                    format: int64
+                    type: integer
+                  runAsNonRoot:
+                    type: boolean
+                  runAsUser:
+                    format: int64
+                    type: integer
+                  seLinuxOptions:
+                    properties:
+                      level:
+                        type: string
+                      role:
+                        type: string
+                      type:
+                        type: string
+                      user:
+                        type: string
+                    type: object
+                  seccompProfile:
+                    properties:
+                      localhostProfile:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                    - type
+                    type: object
+                  windowsOptions:
+                    properties:
+                      gmsaCredentialSpec:
+                        type: string
+                      gmsaCredentialSpecName:
+                        type: string
+                      hostProcess:
+                        type: boolean
+                      runAsUserName:
+                        type: string
+                    type: object
+                type: object
               java:
                 properties:
                   env:
@@ -903,6 +1134,23 @@ spec:
                                   type: string
                               required:
                               - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -1139,6 +1387,23 @@ spec:
                               - fieldPath
                               type: object
                               x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
                             resourceFieldRef:
                               properties:
                                 containerName:
@@ -1174,6 +1439,8 @@ spec:
                       type: object
                     type: array
                   configFile:
+                    maxLength: 256
+                    pattern: ^[A-Za-z0-9._/-]*$
                     type: string
                   env:
                     items:
@@ -1205,6 +1472,23 @@ spec:
                                   type: string
                               required:
                               - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -1427,6 +1711,23 @@ spec:
                                   type: string
                               required:
                               - fieldPath
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
                               type: object
                               x-kubernetes-map-type: atomic
                             resourceFieldRef:
@@ -1664,6 +1965,23 @@ spec:
                               - fieldPath
                               type: object
                               x-kubernetes-map-type: atomic
+                            fileKeyRef:
+                              properties:
+                                key:
+                                  type: string
+                                optional:
+                                  default: false
+                                  type: boolean
+                                path:
+                                  type: string
+                                volumeName:
+                                  type: string
+                              required:
+                              - key
+                              - path
+                              - volumeName
+                              type: object
+                              x-kubernetes-map-type: atomic
                             resourceFieldRef:
                               properties:
                                 containerName:
@@ -1879,6 +2197,11 @@ spec:
                 type: object
             type: object
           status:
+            properties:
+              upgradeBlockedVersions:
+                additionalProperties:
+                  type: string
+                type: object
             type: object
         type: object
     served: true

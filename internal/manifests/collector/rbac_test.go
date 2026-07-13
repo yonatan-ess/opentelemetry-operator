@@ -12,7 +12,6 @@ import (
 )
 
 func TestDesiredClusterRoles(t *testing.T) {
-
 	// No Cluster Roles
 	params, err := newParams("", "testdata/prometheus-exporter.yaml", nil)
 	assert.NoError(t, err, "No")
@@ -81,8 +80,35 @@ func TestDesiredClusterRoles(t *testing.T) {
 			},
 		},
 		{
+			desc:       "k8s_leader_elector extension",
+			configPath: "testdata/rbac_k8sleaderelector_extension.yaml",
+			expectedRules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{"coordination.k8s.io"},
+					Resources: []string{"leases"},
+					Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+				},
+			},
+		},
+		{
 			desc:       "k8sattributes processor - service.name metadata",
 			configPath: "testdata/rbac_k8sattributes_service_name.yaml",
+			expectedRules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods", "namespaces"},
+					Verbs:     []string{"get", "watch", "list"},
+				},
+				{
+					APIGroups: []string{"apps"},
+					Resources: []string{"replicasets"},
+					Verbs:     []string{"get", "watch", "list"},
+				},
+			},
+		},
+		{
+			desc:       "k8s_attributes processor - snake_case alias",
+			configPath: "testdata/rbac_k8s_attributes_snake_case.yaml",
 			expectedRules: []rbacv1.PolicyRule{
 				{
 					APIGroups: []string{""},
@@ -109,7 +135,6 @@ func TestDesiredClusterRoles(t *testing.T) {
 }
 
 func TestDesiredClusterRolBinding(t *testing.T) {
-
 	// No ClusterRoleBinding
 	params, err := newParams("", "testdata/prometheus-exporter.yaml", nil)
 	assert.NoError(t, err)

@@ -140,7 +140,7 @@ type OpenTelemetryCommonFields struct {
 	// +optional
 	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 	// ServiceAccount indicates the name of an existing service account to use with this instance. When set,
-	// the operator will not automatically create a ServiceAccount.
+	// the operator will not automatically Create a ServiceAccount.
 	// +optional
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 	// Image indicates the container image to use for the generated pods.
@@ -195,6 +195,9 @@ type OpenTelemetryCommonFields struct {
 	// DNSPolicy defines how a pod's DNS will be configured.
 	// +optional
 	DNSPolicy *v1.DNSPolicy `json:"dnsPolicy,omitempty"`
+	// HostPID indicates if the pod should have access to the host process ID namespace.
+	// +optional
+	HostPID bool `json:"hostPID,omitempty"`
 	// ShareProcessNamespace indicates if the pod's containers should share process namespace.
 	// +optional
 	ShareProcessNamespace bool `json:"shareProcessNamespace,omitempty"`
@@ -238,6 +241,14 @@ type OpenTelemetryCommonFields struct {
 	// This is only applicable to Service resources.
 	// +optional
 	TrafficDistribution *string `json:"trafficDistribution,omitempty"`
+	// HostUsers isolates pod processes in a separate user namespace, reducing the risk of privilege escalation.
+	// +optional
+	HostUsers *bool `json:"hostUsers,omitempty"`
+	// HostAliases is an optional list of hosts and IPs that will be injected into the pod's hosts file if specified.
+	// This is only valid for non-hostNetwork pods and is not supported on Windows.
+	// +optional
+	// +listType=atomic
+	HostAliases []v1.HostAlias `json:"hostAliases,omitempty"`
 }
 
 type StatefulSetCommonFields struct {
@@ -257,4 +268,10 @@ type StatefulSetCommonFields struct {
 	// Note that the custom service name is not created by the operator.
 	// +optional
 	ServiceName string `json:"serviceName,omitempty"`
+
+	// PodManagementPolicy defines the pod creation and termination order in StatefulSet.
+	// If not specified, it will default to "Parallel"
+	// +optional
+	// +kubebuilder:validation:Enum=OrderedReady;Parallel
+	PodManagementPolicy appsv1.PodManagementPolicyType `json:"podManagementPolicy,omitempty"`
 }

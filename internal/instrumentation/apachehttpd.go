@@ -5,7 +5,8 @@ package instrumentation
 
 import (
 	"fmt"
-	"sort"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -48,12 +49,8 @@ const (
 	6) Inject mounting of volumes / files into appropriate directories in application container
 */
 
-func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod corev1.Pod, useLabelsForResourceAttributes bool, index int, otlpEndpoint string, resourceMap map[string]string, instSpec v1alpha1.InstrumentationSpec) corev1.Pod {
-
+func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod corev1.Pod, useLabelsForResourceAttributes bool, container *corev1.Container, otlpEndpoint string, resourceMap map[string]string, instSpec v1alpha1.InstrumentationSpec) corev1.Pod {
 	volume := instrVolume(apacheSpec.VolumeClaimTemplate, apacheAgentVolume, apacheSpec.VolumeSizeLimit)
-
-	// caller checks if there is at least one container
-	container := &pod.Spec.Containers[index]
 
 	// inject env vars
 	container.Env = appendIfNotSet(container.Env, apacheSpec.Env...)
@@ -68,29 +65,29 @@ func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod 
 				EmptyDir: &corev1.EmptyDirVolumeSource{
 					SizeLimit: volumeSize(apacheSpec.VolumeSizeLimit),
 				},
-			}})
+			},
+		})
 
 		apacheConfDir := getApacheConfDir(apacheSpec.ConfigPath)
 
-		cloneContainer := container.DeepCopy()
-		cloneContainer.Name = apacheAgentCloneContainerName
-		cloneContainer.Command = []string{"/bin/sh", "-c"}
-		cloneContainer.Args = []string{"cp -r " + apacheConfDir + "/* " + apacheAgentConfDirFull}
-		cloneContainer.VolumeMounts = append(cloneContainer.VolumeMounts, corev1.VolumeMount{
-			Name:      apacheAgentConfigVolume,
-			MountPath: apacheAgentConfDirFull,
-		})
-		// remove resource requirements since those are then reserved for the lifetime of a pod
-		// and we definitely do not need them for the init container for cp command
-		cloneContainer.Resources = apacheSpec.Resources
-		// remove livenessProbe, readinessProbe, and startupProbe, since not supported on init containers
-		cloneContainer.LivenessProbe = nil
-		cloneContainer.ReadinessProbe = nil
-		cloneContainer.StartupProbe = nil
-		// remove lifecycle, since not supported on init containers
-		cloneContainer.Lifecycle = nil
+		// don't use filepath.Join here because we want to keep the dot at the end
+		apacheConfDirDestinationPath := apacheConfDir + string(filepath.Separator) + "."
+		cloneContainer := corev1.Container{
+			Name:    apacheAgentCloneContainerName,
+			Image:   container.Image,
+			Command: []string{"cp", "-r", apacheConfDirDestinationPath, apacheAgentConfDirFull},
+			Env:     container.Env,
+			EnvFrom: container.EnvFrom,
+			VolumeMounts: slices.Concat(container.VolumeMounts, []corev1.VolumeMount{{
+				Name:      apacheAgentConfigVolume,
+				MountPath: apacheAgentConfDirFull,
+			}}),
+			Resources:       apacheSpec.Resources,
+			SecurityContext: container.SecurityContext,
+			ImagePullPolicy: container.ImagePullPolicy,
+		}
 
-		pod.Spec.InitContainers = append(pod.Spec.InitContainers, *cloneContainer)
+		pod.Spec.InitContainers = append(pod.Spec.InitContainers, cloneContainer)
 
 		// drop volume mount with volume-provided Apache config from original container
 		// since it could over-write configuration provided by the injection
@@ -128,24 +125,16 @@ func injectApacheHttpdagent(_ logr.Logger, apacheSpec v1alpha1.ApacheHttpd, pod 
 			Name:    apacheAgentInitContainerName,
 			Image:   apacheSpec.Image,
 			Command: []string{"/bin/sh", "-c"},
-			Args: []string{
-				// Copy agent binaries to shared volume
-				"cp -r /opt/opentelemetry/* " + apacheAgentDirFull + " && " +
-					// setup logging configuration from template
-					"export agentLogDir=$(echo \"" + apacheAgentDirFull + "/logs\" | sed 's,/,\\\\/,g') && " +
-					"cat " + apacheAgentDirFull + "/conf/opentelemetry_sdk_log4cxx.xml.template | sed 's/__agent_log_dir__/'${agentLogDir}'/g'  > " + apacheAgentDirFull + "/conf/opentelemetry_sdk_log4cxx.xml &&" +
-					// Create agent configuration file by pasting content of env var to a file
-					"echo \"$" + apacheAttributesEnvVar + "\" > " + apacheAgentConfDirFull + "/" + apacheAgentConfigFile + " && " +
-					"sed -i 's/" + apacheServiceInstanceId + "/'${" + apacheServiceInstanceIdEnvVar + "}'/g' " + apacheAgentConfDirFull + "/" + apacheAgentConfigFile + " && " +
-					// Include a link to include Apache agent configuration file into httpd.conf
-					"echo -e '\nInclude " + getApacheConfDir(apacheSpec.ConfigPath) + "/" + apacheAgentConfigFile + "' >> " + apacheAgentConfDirFull + "/" + apacheConfigFile,
-			},
+			// User-controlled value is passed as a positional arg (read as $1
+			// in the script) so it is never parsed by the shell.
+			Args: []string{apacheHttpdAgentScript, "--", getApacheConfDir(apacheSpec.ConfigPath)},
 			Env: []corev1.EnvVar{
 				{
 					Name:  apacheAttributesEnvVar,
-					Value: getApacheOtelConfig(pod, useLabelsForResourceAttributes, apacheSpec, index, otlpEndpoint, resourceMap),
+					Value: getApacheOtelConfig(pod, useLabelsForResourceAttributes, apacheSpec, container, otlpEndpoint, resourceMap),
 				},
-				{Name: apacheServiceInstanceIdEnvVar,
+				{
+					Name: apacheServiceInstanceIdEnvVar,
 					ValueFrom: &corev1.EnvVarSource{
 						FieldRef: &corev1.ObjectFieldSelector{
 							FieldPath: "metadata.name",
@@ -183,7 +172,7 @@ func isApacheInitContainerMissing(pod corev1.Pod, containerName string) bool {
 
 // Calculate Apache HTTPD agent configuration file based on attributes provided by the injection rules
 // and by the pod values.
-func getApacheOtelConfig(pod corev1.Pod, useLabelsForResourceAttributes bool, apacheSpec v1alpha1.ApacheHttpd, index int, otelEndpoint string, resourceMap map[string]string) string {
+func getApacheOtelConfig(pod corev1.Pod, useLabelsForResourceAttributes bool, apacheSpec v1alpha1.ApacheHttpd, container *corev1.Container, otelEndpoint string, resourceMap map[string]string) string {
 	template := `
 #Load the Otel Webserver SDK
 LoadFile %[1]s/sdk_lib/lib/libopentelemetry_common.so
@@ -204,14 +193,13 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 	if otelEndpoint == "" {
 		otelEndpoint = "http://localhost:4317/"
 	}
-	serviceName := chooseServiceName(pod, useLabelsForResourceAttributes, resourceMap, index)
+	serviceName := chooseServiceName(pod, useLabelsForResourceAttributes, resourceMap, container)
 	serviceNamespace := pod.GetNamespace()
-	if len(serviceNamespace) == 0 {
+	if serviceNamespace == "" {
 		serviceNamespace = resourceMap[string(semconv.K8SNamespaceNameKey)]
-		if len(serviceNamespace) == 0 {
+		if serviceNamespace == "" {
 			serviceNamespace = "apache-httpd"
 		}
-
 	}
 	// Namespace name override TBD
 
@@ -240,7 +228,8 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 		attrMap[attr.Name] = attr.Value
 	}
 
-	configFileContent := fmt.Sprintf(template,
+	var configFileContent strings.Builder
+	fmt.Fprintf(&configFileContent, template,
 		apacheAgentDirectory+apacheAgentSubDirectory,
 		versionSuffix)
 
@@ -248,13 +237,13 @@ LoadModule otel_apache_module %[1]s/WebServerModule/Apache/libmod_apache_otel%[2
 	for key := range attrMap {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	for _, key := range keys {
-		configFileContent += fmt.Sprintf("%s %s\n", key, attrMap[key])
+		fmt.Fprintf(&configFileContent, "%s %s\n", key, attrMap[key])
 	}
 
-	return configFileContent
+	return configFileContent.String()
 }
 
 func getApacheConfDir(configuredDir string) string {

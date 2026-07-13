@@ -4,14 +4,25 @@
 package target
 
 import (
-	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 )
+
+// seps is the separator used between label name/value pairs in hash computation.
+// This matches Prometheus's label hashing approach.
+var seps = []byte{'\xff'}
+
+// hasherPool is a pool of xxhash digesters for efficient hash computation.
+var hasherPool = sync.Pool{
+	New: func() any {
+		return xxhash.New()
+	},
+}
 
 // nodeLabels are labels that are used to identify the node on which the given
 // target is residing. To learn more about these labels, please refer to:
@@ -36,38 +47,46 @@ func (h ItemHash) String() string {
 
 // Item represents a target to be scraped.
 type Item struct {
-	JobName   string
-	TargetURL string
-	Labels    labels.Labels
-	// relabeledLabels contains the final labels after Prometheus relabeling processing.
-	relabeledLabels labels.Labels
-	CollectorName   string
-	hash            ItemHash
-}
-
-type ItemOption func(*Item)
-
-func WithRelabeledLabels(lbs labels.Labels) ItemOption {
-	return func(i *Item) {
-		// In Prometheus, labels with the MetaLabelPrefix are discarded after relabeling, which means they are not used in hash calculation.
-		// For details, see https://github.com/prometheus/prometheus/blob/e6cfa720fbe6280153fab13090a483dbd40bece3/scrape/target.go#L534.
-		writeIndex := 0
-		relabeledLabels := make(labels.Labels, len(lbs))
-		for _, l := range lbs {
-			if !strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
-				relabeledLabels[writeIndex] = l
-				writeIndex++
-			}
-		}
-		i.relabeledLabels = slices.Clip(relabeledLabels[:writeIndex])
-	}
+	JobName       string
+	TargetURL     string
+	Labels        labels.Labels
+	CollectorName string
+	hash          ItemHash
 }
 
 func (t *Item) Hash() ItemHash {
-	if t.hash == 0 {
-		t.hash = ItemHash(LabelsHashWithJobName(t.relabeledLabels, t.JobName))
-	}
 	return t.hash
+}
+
+// HashLabels computes the item hash for a fully materialized label set and job name.
+// It delegates to HashFromBuilder so the result is identical to the hash computed while
+// relabeling targets during discovery. Callers that already hold a labels.Builder (e.g. the
+// discoverer's hot path) should use HashFromBuilder directly to avoid allocating a builder.
+func HashLabels(ls labels.Labels, jobName string) ItemHash {
+	return HashFromBuilder(labels.NewBuilder(ls), jobName)
+}
+
+// HashFromBuilder computes a hash from a labels.Builder, skipping meta labels.
+// Meta labels are skipped because Prometheus discards them after relabeling, so two targets
+// that differ only in meta labels are the same scrape target and must hash identically.
+func HashFromBuilder(builder *labels.Builder, jobName string) ItemHash {
+	hash := hasherPool.Get().(*xxhash.Digest)
+	hash.Reset()
+	builder.Range(func(l labels.Label) {
+		// Skip meta labels - they are discarded after relabeling in Prometheus.
+		// For details, see https://github.com/prometheus/prometheus/blob/e6cfa720fbe6280153fab13090a483dbd40bece3/scrape/target.go#L534
+		if strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
+			return
+		}
+		_, _ = hash.WriteString(l.Name)
+		_, _ = hash.Write(seps)
+		_, _ = hash.WriteString(l.Value)
+		_, _ = hash.Write(seps)
+	})
+	_, _ = hash.WriteString(jobName)
+	result := hash.Sum64()
+	hasherPool.Put(hash)
+	return ItemHash(result)
 }
 
 func (t *Item) GetNodeName() string {
@@ -92,57 +111,16 @@ func (t *Item) GetEndpointSliceName() string {
 }
 
 // NewItem Creates a new target item.
+// The hash must be computed by the caller (see HashFromBuilder/HashLabels); it identifies the
+// target for allocation and deduplication.
 // INVARIANTS:
 // * Item fields must not be modified after creation.
-func NewItem(jobName string, targetURL string, labels labels.Labels, collectorName string, opts ...ItemOption) *Item {
-	item := &Item{
-		JobName:   jobName,
-		TargetURL: targetURL,
-		Labels:    labels,
-		// relabeledLabels defaults to original labels if WithRelabeledLabels is not specified.
-		relabeledLabels: labels,
-		CollectorName:   collectorName,
+func NewItem(jobName, targetURL string, itemLabels labels.Labels, collectorName string, hash ItemHash) *Item {
+	return &Item{
+		JobName:       jobName,
+		TargetURL:     targetURL,
+		Labels:        itemLabels,
+		CollectorName: collectorName,
+		hash:          hash,
 	}
-	for _, opt := range opts {
-		opt(item)
-	}
-	return item
-}
-
-// LabelsHashWithJobName computes a hash of the labels and the job name.
-// Same logic as Prometheus labels.Hash: https://github.com/prometheus/prometheus/blob/8fd46f74aa0155e4d5aa30654f9c02e564e03743/model/labels/labels.go#L72
-// but adds in the job name since this is not in the labelset from the discovery manager.
-// The scrape manager adds it later. Address is already included in the labels, so it is not needed here.
-func LabelsHashWithJobName(ls labels.Labels, jobName string) uint64 {
-	var sep byte = '\xff'
-	var seps = []byte{sep}
-
-	// Use xxhash.Sum64(b) for fast path as it's faster.
-	b := make([]byte, 0, 1024)
-
-	// Differs from Prometheus implementation by adding job name.
-	b = append(b, jobName...)
-	b = append(b, sep)
-
-	for i, v := range ls {
-		if len(b)+len(v.Name)+len(v.Value)+2 >= cap(b) {
-			// If labels entry is 1KB+ do not allocate whole entry.
-			h := xxhash.New()
-			_, _ = h.Write(b)
-			for _, v := range ls[i:] {
-				_, _ = h.WriteString(v.Name)
-				_, _ = h.Write(seps)
-				_, _ = h.WriteString(v.Value)
-				_, _ = h.Write(seps)
-			}
-			return h.Sum64()
-		}
-
-		b = append(b, v.Name...)
-		b = append(b, sep)
-		b = append(b, v.Value...)
-		b = append(b, sep)
-	}
-
-	return xxhash.Sum64(b)
 }

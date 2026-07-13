@@ -18,22 +18,26 @@ import (
 )
 
 const (
-	operatorName         = "opentelemetry-operator-controller-manager"
-	defaultAPIServerPort = 6443
-	defaultRBACProxyPort = 8443
+	operatorName = "opentelemetry-operator-controller-manager"
 )
 
 type networkPolicy struct {
 	clientset kubernetes.Interface
 	scheme    *runtime.Scheme
 
-	operatorNamespace string
-	webhookPort       int32
-	metricsPort       int32
+	operatorNamespace          string
+	apiServerPort              int32
+	apiServerIPs               []string
+	webhookPort                int32
+	metricsPort                int32
+	apiServerPodSelector       *metav1.LabelSelector
+	apiServerNamespaceSelector *metav1.LabelSelector
 }
 
-var _ manager.Runnable = (*networkPolicy)(nil)
-var _ manager.LeaderElectionRunnable = (*networkPolicy)(nil)
+var (
+	_ manager.Runnable               = (*networkPolicy)(nil)
+	_ manager.LeaderElectionRunnable = (*networkPolicy)(nil)
+)
 
 func NewOperatorNetworkPolicy(clientset kubernetes.Interface, scheme *runtime.Scheme, options ...Option) manager.Runnable {
 	n := &networkPolicy{
@@ -56,6 +60,20 @@ func WithOperatorNamespace(operatorNamespace string) Option {
 	}
 }
 
+// WithAPIServerPort sets the port of the API server and enables it in the network policy.
+func WithAPIServerPort(apiServerPort int32) Option {
+	return func(s *networkPolicy) {
+		s.apiServerPort = apiServerPort
+	}
+}
+
+// WithAPIServerIPs sets the IPs of the API server for use in network policy IPBlock rules.
+func WithAPIServerIPs(ips []string) Option {
+	return func(s *networkPolicy) {
+		s.apiServerIPs = ips
+	}
+}
+
 // WithWebhookPort sets the port of the webhook and enables it in the network policy.
 func WithWebhookPort(webhookPort int32) Option {
 	return func(s *networkPolicy) {
@@ -70,9 +88,34 @@ func WithMetricsPort(metricsPort int32) Option {
 	}
 }
 
+// WithAPISererPodLabelSelector sets the label selector for the pod of the API server.
+func WithAPISererPodLabelSelector(selector *metav1.LabelSelector) Option {
+	return func(s *networkPolicy) {
+		s.apiServerPodSelector = selector
+	}
+}
+
+// WithAPISererNamespaceLabelSelector sets the label selector for tbe namespace of the API server.
+func WithAPISererNamespaceLabelSelector(selector *metav1.LabelSelector) Option {
+	return func(s *networkPolicy) {
+		s.apiServerNamespaceSelector = selector
+	}
+}
+
 func (n *networkPolicy) Start(ctx context.Context) error {
 	tcp := corev1.ProtocolTCP
-	apiServerPort := intstr.FromInt32(defaultAPIServerPort)
+	apiServerPort := intstr.FromInt32(n.apiServerPort)
+
+	var apiSeverIPs []networkingv1.NetworkPolicyPeer
+	// Add IPBlock rules for API server IPs
+	for _, ip := range n.apiServerIPs {
+		cidr := ip + "/32"
+		apiSeverIPs = append(apiSeverIPs, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{
+				CIDR: cidr,
+			},
+		})
+	}
 
 	np := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -94,10 +137,27 @@ func (n *networkPolicy) Start(ctx context.Context) error {
 							Port:     &apiServerPort,
 						},
 					},
+					To: apiSeverIPs,
 				},
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 		},
+	}
+
+	if n.apiServerPodSelector != nil || n.apiServerNamespaceSelector != nil {
+		peer := networkingv1.NetworkPolicyPeer{
+			PodSelector:       n.apiServerPodSelector,
+			NamespaceSelector: n.apiServerNamespaceSelector,
+		}
+		np.Spec.Egress = append(np.Spec.Egress, networkingv1.NetworkPolicyEgressRule{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{
+					Protocol: &tcp,
+					Port:     &apiServerPort,
+				},
+			},
+			To: []networkingv1.NetworkPolicyPeer{peer},
+		})
 	}
 
 	if n.webhookPort != 0 {
@@ -109,15 +169,9 @@ func (n *networkPolicy) Start(ctx context.Context) error {
 	}
 	if n.metricsPort != 0 {
 		metricsPort := intstr.FromInt32(n.metricsPort)
-		// The RBAC proxy is used to secure the metrics endpoint.
-		rbacProxyPort := intstr.FromInt32(defaultRBACProxyPort)
 		np.Spec.Ingress[0].Ports = append(np.Spec.Ingress[0].Ports, networkingv1.NetworkPolicyPort{
 			Protocol: &tcp,
 			Port:     &metricsPort,
-		})
-		np.Spec.Ingress[0].Ports = append(np.Spec.Ingress[0].Ports, networkingv1.NetworkPolicyPort{
-			Protocol: &tcp,
-			Port:     &rbacProxyPort,
 		})
 	}
 
@@ -141,6 +195,6 @@ func (n *networkPolicy) Start(ctx context.Context) error {
 	return nil
 }
 
-func (d *networkPolicy) NeedLeaderElection() bool {
+func (*networkPolicy) NeedLeaderElection() bool {
 	return true
 }

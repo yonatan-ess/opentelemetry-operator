@@ -28,25 +28,29 @@ const (
 	muslLinux                        = "musl"
 )
 
-func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, platform string, instSpec v1alpha1.InstrumentationSpec) (corev1.Pod, error) {
-	volume := instrVolume(pythonSpec.VolumeClaimTemplate, pythonVolumeName, pythonSpec.VolumeSizeLimit)
+func pythonPlatformSrc(platform string) (string, error) {
+	// Validate platform
+	switch platform {
+	case "", glibcLinux:
+		return glibcLinuxAutoInstrumentationSrc, nil
+	case muslLinux:
+		return muslLinuxAutoInstrumentationSrc, nil
+	default:
+		return "", fmt.Errorf("provided instrumentation.opentelemetry.io/otel-python-platform annotation value '%s' is not supported", platform)
+	}
+}
 
-	// caller checks if there is at least one container.
-	container := &pod.Spec.Containers[index]
+func injectPythonSDKToContainer(pythonSpec v1alpha1.Python, container *corev1.Container, platform string) error {
+	volume := instrVolume(pythonSpec.VolumeClaimTemplate, pythonVolumeName, pythonSpec.VolumeSizeLimit)
 
 	err := validateContainerEnv(container.Env, envPythonPath)
 	if err != nil {
-		return pod, err
+		return err
 	}
 
-	autoInstrumentationSrc := ""
-	switch platform {
-	case "", glibcLinux:
-		autoInstrumentationSrc = glibcLinuxAutoInstrumentationSrc
-	case muslLinux:
-		autoInstrumentationSrc = muslLinuxAutoInstrumentationSrc
-	default:
-		return pod, fmt.Errorf("provided instrumentation.opentelemetry.io/otel-python-platform annotation value '%s' is not supported", platform)
+	_, err = pythonPlatformSrc(platform)
+	if err != nil {
+		return err
 	}
 
 	// inject Python instrumentation spec env vars.
@@ -62,38 +66,24 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, plat
 		container.Env[idx].Value = fmt.Sprintf("%s:%s:%s", pythonPathPrefix, container.Env[idx].Value, pythonPathSuffix)
 	}
 
-	container.Env = appendIfNotSet(container.Env,
-		// Set OTEL_EXPORTER_OTLP_PROTOCOL to http/protobuf if not set by user because it is what our autoinstrumentation supports.
-		corev1.EnvVar{
-			Name:  envOtelExporterOTLPProtocol,
-			Value: "http/protobuf",
-		},
-		// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
-		corev1.EnvVar{
-			Name:  envOtelTracesExporter,
-			Value: "otlp",
-		},
-		// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
-		corev1.EnvVar{
-			Name:  envOtelMetricsExporter,
-			Value: "otlp",
-		},
-		// Set OTEL_LOGS_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
-		corev1.EnvVar{
-			Name:  envOtelLogsExporter,
-			Value: "otlp",
-		},
-	)
-
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name:      volume.Name,
 		MountPath: pythonInstrMountPath,
 	})
+	return nil
+}
+
+func injectPythonSDKToPod(pythonSpec v1alpha1.Python, pod corev1.Pod, firstContainerName, platform string, instSpec v1alpha1.InstrumentationSpec) corev1.Pod {
+	volume := instrVolume(pythonSpec.VolumeClaimTemplate, pythonVolumeName, pythonSpec.VolumeSizeLimit)
+
+	// This has been validated already
+	autoInstrumentationSrc, _ := pythonPlatformSrc(platform)
 
 	// We just inject Volumes and init containers for the first processed container.
 	if isInitContainerMissing(pod, pythonInitContainerName) {
 		pod.Spec.Volumes = append(pod.Spec.Volumes, volume)
-		pod.Spec.InitContainers = append(pod.Spec.InitContainers, corev1.Container{
+
+		initContainer := corev1.Container{
 			Name:      pythonInitContainerName,
 			Image:     pythonSpec.Image,
 			Command:   []string{"cp", "-r", autoInstrumentationSrc, pythonInstrMountPath},
@@ -103,7 +93,48 @@ func injectPythonSDK(pythonSpec v1alpha1.Python, pod corev1.Pod, index int, plat
 				MountPath: pythonInstrMountPath,
 			}},
 			ImagePullPolicy: instSpec.ImagePullPolicy,
-		})
+		}
+
+		pod.Spec.InitContainers = insertInitContainer(&pod, initContainer, firstContainerName)
 	}
-	return pod, nil
+	return pod
+}
+
+// injectPythonSDK injects Python instrumentation into the specified containers.
+// Containers must point into the provided pod and be ordered with init containers first.
+func injectPythonSDK(pythonSpec v1alpha1.Python, pod *corev1.Pod, containers []*corev1.Container, platform string, instSpec v1alpha1.InstrumentationSpec) error {
+	for _, container := range containers {
+		if err := injectPythonSDKToContainer(pythonSpec, container, platform); err != nil {
+			return err
+		}
+	}
+	if len(containers) > 0 {
+		*pod = injectPythonSDKToPod(pythonSpec, *pod, containers[0].Name, platform, instSpec)
+	}
+	return nil
+}
+
+func getDefaultPythonEnvVars() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		// Set OTEL_EXPORTER_OTLP_PROTOCOL to http/protobuf if not set by user because it is what our autoinstrumentation supports.
+		{
+			Name:  envOtelExporterOTLPProtocol,
+			Value: "http/protobuf",
+		},
+		// Set OTEL_TRACES_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
+		{
+			Name:  envOtelTracesExporter,
+			Value: "otlp",
+		},
+		// Set OTEL_METRICS_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
+		{
+			Name:  envOtelMetricsExporter,
+			Value: "otlp",
+		},
+		// Set OTEL_LOGS_EXPORTER to otlp exporter if not set by user because it is what our autoinstrumentation supports.
+		{
+			Name:  envOtelLogsExporter,
+			Value: "otlp",
+		},
+	}
 }

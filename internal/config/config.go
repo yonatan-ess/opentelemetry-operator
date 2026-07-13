@@ -8,14 +8,18 @@ import (
 	"fmt"
 
 	"github.com/goccy/go-yaml"
+	corev1 "k8s.io/api/core/v1"
 
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/collector"
+	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/gatewayapi"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/opampbridge"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/prometheus"
 	autoRBAC "github.com/open-telemetry/opentelemetry-operator/internal/autodetect/rbac"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/targetallocator"
+	"github.com/open-telemetry/opentelemetry-operator/internal/components"
 	"github.com/open-telemetry/opentelemetry-operator/internal/version"
 	"github.com/open-telemetry/opentelemetry-operator/pkg/constants"
 )
@@ -24,6 +28,7 @@ const (
 	defaultCollectorConfigMapEntry           = "collector.yaml"
 	defaultTargetAllocatorConfigMapEntry     = "targetallocator.yaml"
 	defaultOperatorOpAMPBridgeConfigMapEntry = "remoteconfiguration.yaml"
+	defaultOpenShiftWebhookReplicas          = 2
 )
 
 type ZapConfig struct {
@@ -83,6 +88,8 @@ type Config struct {
 	OpenshiftCreateDashboard bool `yaml:"openshift-create-dashboard"`
 	// OpenShiftRoutesAvailability represents the availability of the OpenShift Routes API.
 	OpenShiftRoutesAvailability openshift.RoutesAvailability `yaml:"open-shift-routes-availability"`
+	// GatewayAPIsAvailability represents the availability of the Gateway APIs.
+	GatewayAPIsAvailability gatewayapi.ApiAvailability `yaml:"gateway-apis-availability"`
 	// PrometheusCRAvailability represents the availability of the Prometheus Operator CRDs.
 	PrometheusCRAvailability prometheus.Availability `yaml:"prometheus-cr-availability"`
 	// CertManagerAvailability represents the availability of the Cert-Manager.
@@ -101,6 +108,12 @@ type Config struct {
 	AnnotationsFilter []string `yaml:"annotations-filter"`
 	// MetricsAddr is the address the metric endpoint binds to.
 	MetricsAddr string `yaml:"metrics-addr"`
+	// MetricsSecure enables serving metrics via HTTPS with authentication and authorization.
+	MetricsSecure bool `yaml:"metrics-secure"`
+	// MetricsTLSCertFile is the TLS certificate file for the metrics server.
+	MetricsTLSCertFile string `yaml:"metrics-tls-cert-file"`
+	// MetricsTLSKeyFile is the TLS private key file for the metrics server.
+	MetricsTLSKeyFile string `yaml:"metrics-tls-key-file"`
 	// ProbeAddr is the address the probe endpoint binds to.
 	ProbeAddr string `yaml:"health-probe-addr"`
 	// PprofAddr is the address to expose the pprof server. Default is empty string which disables the pprof server.
@@ -115,20 +128,50 @@ type Config struct {
 	WebhookPort int `yaml:"webhook-port"`
 	// FipsDisabledComponents are disabled collector components when operator runs on FIPS enabled platform
 	FipsDisabledComponents string `yaml:"fips-disabled-components"`
+	// WatchNamespace is a comma-separated list of namespaces the operator should watch for
+	// CustomResources. Empty string (the default) means watch all namespaces.
+	WatchNamespace string `yaml:"watch-namespace"`
 	// TLS holds the TLS configuration of the controllers.
 	TLS TLSConfig `yaml:"tls"`
 	// ZapConfig holds the advanced Zap logging config
 	Zap ZapConfig `yaml:"zap"`
 	// EnableWebhooks enables the webhooks used by controllers.
 	EnableWebhooks bool `yaml:"enable-webhooks"`
+	// FeatureGates is a comma-separated list of feature gates to enable/disable.
+	// Format: "gate1,gate2,-gate3" where - prefix disables the gate.
+	FeatureGates string `yaml:"feature-gates"`
 	// Internal contains configuration that is propagated and cannot be accessed from the operator configuration.
 	Internal Internal `yaml:"-"`
+	// Instrumentation is the set of instrumentations to use if CRDs are not present
+	Instrumentation v1alpha1.Instrumentation `yaml:"instrumentations"`
+	// EnableInstrumentationCRDs enables looking for instrumentation CRDs.
+	EnableInstrumentationCRDs bool `yaml:"enable-instrumentation-crds"`
+	// ProxyEnvVars holds the proxy environment variables (HTTP_PROXY, HTTPS_PROXY,
+	// NO_PROXY — upper and lower case) captured from the operator's environment at
+	// startup and propagated to all managed containers.
+	ProxyEnvVars []corev1.EnvVar `yaml:"-"`
+	// OpenShiftWebhookReplicas is the desired number of replicas for the standalone pod webhook deployment.
+	// Only used on OpenShift with OLM where the pod webhook is deployed separately.
+	// Set to 0 to disable the standalone webhook (webhook runs in operator pod instead).
+	// Set to 1 to disable HA but keep the standalone deployment.
+	// Default is 2 for HA on OpenShift. Only scaling down (0 or 1) is supported via env var.
+	OpenShiftWebhookReplicas int32 `yaml:"openshift-webhook-replicas"`
 }
 
 // Internal contains configuration that is propagated and cannot be accessed from the operator configuration.
 type Internal struct {
 	// NativeSidecarSupport is set to true if the corresponding featuregate is enabled and the minimum required k8s version is met.
 	NativeSidecarSupport bool `yaml:"native-sidecar-support"`
+	// KubeAPIServerPort is the port of the Kubernetes API server discovered from EndpointSlices.
+	KubeAPIServerPort int32 `yaml:"kube-api-server-port"`
+	// KubeAPIServerIPs are the IPs of the Kubernetes API server discovered from EndpointSlices.
+	KubeAPIServerIPs []string `yaml:"kube-api-server-ips"`
+	// OperandTLSProfile holds the TLS profile to inject into operand (collector) configurations.
+	// This is set at operator startup from the cluster's TLS security profile and is applied
+	// during reconciliation when generating ConfigMaps. When the cluster TLS profile changes,
+	// the operator restarts (via SecurityProfileWatcher) and all collectors are reconciled
+	// with the new TLS settings.
+	OperandTLSProfile components.TLSProfile `yaml:"-"`
 }
 
 // New constructs a new configuration.
@@ -166,13 +209,18 @@ func New() Config {
 		AnnotationsFilter:                   []string{constants.KubernetesLastAppliedConfigurationAnnotation},
 		CreateRBACPermissions:               autoRBAC.NotAvailable,
 		OpAmpBridgeAvailability:             opampbridge.NotAvailable,
-		MetricsAddr:                         ":8080",
+		MetricsAddr:                         ":8443",
+		MetricsSecure:                       true,
+		MetricsTLSCertFile:                  "",
+		MetricsTLSKeyFile:                   "",
 		ProbeAddr:                           ":8081",
 		WebhookPort:                         9443,
 		FipsDisabledComponents:              "uppercase",
 		TLS: TLSConfig{
-			MinVersion:   "VersionTLS12",
-			CipherSuites: nil,
+			UseClusterProfile: false,
+			ConfigureOperands: false,
+			MinVersion:        "VersionTLS12",
+			CipherSuites:      nil,
 		},
 		Zap: ZapConfig{
 			MessageKey:  "message",
@@ -184,6 +232,8 @@ func New() Config {
 		Internal: Internal{
 			NativeSidecarSupport: false,
 		},
+		EnableInstrumentationCRDs: true,
+		OpenShiftWebhookReplicas:  defaultOpenShiftWebhookReplicas,
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/certmanager"
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
@@ -29,7 +30,7 @@ var metricContainerPort = corev1.ContainerPort{
 
 func TestContainerNewDefault(t *testing.T) {
 	// prepare
-	var defaultConfig = `receivers:
+	defaultConfig := `receivers:
   otlp:
     protocols:
     http:
@@ -62,7 +63,7 @@ func TestContainerNewDefault(t *testing.T) {
 	}
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Equal(t, "default-image", c.Image)
@@ -82,14 +83,43 @@ func TestContainerWithImageOverridden(t *testing.T) {
 		CollectorImage: "default-image",
 	}
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Equal(t, "overridden-image", c.Image)
 }
 
+func TestContainerCommandPassthrough(t *testing.T) {
+	otelcol := v1beta1.OpenTelemetryCollector{
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			Command: []string{"/usr/share/agent", "otel"},
+		},
+	}
+	cfg := config.Config{CollectorImage: "default-image"}
+	c := Container(cfg, testLogger, otelcol, true, nil)
+
+	assert.Equal(t, []string{"/usr/share/agent", "otel"}, c.Command)
+	assert.Contains(t, c.Args[0], "--config=")
+}
+
+func TestContainerCommandOmittedWhenUnset(t *testing.T) {
+	otelcol := v1beta1.OpenTelemetryCollector{Spec: v1beta1.OpenTelemetryCollectorSpec{}}
+	c := Container(config.Config{CollectorImage: "default-image"}, testLogger, otelcol, true, nil)
+	assert.Nil(t, c.Command)
+}
+
+func TestContainerCommandNameOnly(t *testing.T) {
+	otelcol := v1beta1.OpenTelemetryCollector{
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			Command: []string{"/otelcol"},
+		},
+	}
+	c := Container(config.Config{CollectorImage: "default-image"}, testLogger, otelcol, true, nil)
+	assert.Equal(t, []string{"/otelcol"}, c.Command)
+}
+
 func TestContainerPorts(t *testing.T) {
-	var goodConfig = `receivers:
+	goodConfig := `receivers:
   examplereceiver:
     endpoint: "0.0.0.0:12345"
 exporters:
@@ -385,7 +415,7 @@ service:
 			}
 
 			// test
-			c := Container(cfg, testLogger, otelcol, true)
+			c := Container(cfg, testLogger, otelcol, true, nil)
 			// verify
 			assert.ElementsMatch(t, testCase.expectedPorts, c.Ports, testCase.description)
 		})
@@ -407,7 +437,7 @@ func TestContainerConfigFlagIsIgnored(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Len(t, c.Args, 2)
@@ -429,7 +459,7 @@ func TestContainerCustomVolumes(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Len(t, c.VolumeMounts, 2)
@@ -452,7 +482,7 @@ func TestContainerCustomConfigMapsVolumes(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Len(t, c.VolumeMounts, 3)
@@ -464,7 +494,7 @@ func TestContainerCustomConfigMapsVolumes(t *testing.T) {
 
 func TestContainerCustomSecurityContext(t *testing.T) {
 	// default config without security context
-	c1 := Container(config.New(), testLogger, v1beta1.OpenTelemetryCollector{Spec: v1beta1.OpenTelemetryCollectorSpec{}}, true)
+	c1 := Container(config.New(), testLogger, v1beta1.OpenTelemetryCollector{Spec: v1beta1.OpenTelemetryCollectorSpec{}}, true, nil)
 
 	// verify
 	assert.Nil(t, c1.SecurityContext)
@@ -477,14 +507,13 @@ func TestContainerCustomSecurityContext(t *testing.T) {
 	c2 := Container(config.New(), testLogger, v1beta1.OpenTelemetryCollector{
 		Spec: v1beta1.OpenTelemetryCollectorSpec{
 			OpenTelemetryCommonFields: v1beta1.OpenTelemetryCommonFields{
-
 				SecurityContext: &corev1.SecurityContext{
 					Privileged: &isPrivileged,
 					RunAsUser:  &uid,
 				},
 			},
 		},
-	}, true)
+	}, true, nil)
 
 	// verify
 	assert.NotNil(t, c2.SecurityContext)
@@ -509,12 +538,15 @@ func TestContainerEnvVarsOverridden(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
-	assert.Len(t, c.Env, 2)
+	assert.Len(t, c.Env, 4)
 	assert.Equal(t, "foo", c.Env[0].Name)
 	assert.Equal(t, "bar", c.Env[0].Value)
+	assert.Equal(t, "POD_NAME", c.Env[1].Name)
+	assert.Equal(t, "GOMEMLIMIT", c.Env[2].Name)
+	assert.Equal(t, "GOMAXPROCS", c.Env[3].Name)
 }
 
 func TestContainerDefaultEnvVars(t *testing.T) {
@@ -525,29 +557,36 @@ func TestContainerDefaultEnvVars(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
-	assert.Len(t, c.Env, 1)
+	assert.Len(t, c.Env, 3)
 	assert.Equal(t, c.Env[0].Name, "POD_NAME")
+	assert.Equal(t, c.Env[1].Name, "GOMEMLIMIT")
+	assert.Equal(t, c.Env[2].Name, "GOMAXPROCS")
 }
 
 func TestContainerProxyEnvVars(t *testing.T) {
-	t.Setenv("NO_PROXY", "localhost")
 	otelcol := v1beta1.OpenTelemetryCollector{
 		Spec: v1beta1.OpenTelemetryCollectorSpec{},
 	}
 
 	cfg := config.New()
+	cfg.ProxyEnvVars = []corev1.EnvVar{
+		{Name: "NO_PROXY", Value: "localhost"},
+		{Name: "no_proxy", Value: "localhost"},
+	}
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
-	require.Len(t, c.Env, 3)
+	require.Len(t, c.Env, 5)
 	assert.Equal(t, "POD_NAME", c.Env[0].Name)
-	assert.Equal(t, corev1.EnvVar{Name: "NO_PROXY", Value: "localhost"}, c.Env[1])
-	assert.Equal(t, corev1.EnvVar{Name: "no_proxy", Value: "localhost"}, c.Env[2])
+	assert.Equal(t, "GOMEMLIMIT", c.Env[1].Name)
+	assert.Equal(t, "GOMAXPROCS", c.Env[2].Name)
+	assert.Equal(t, corev1.EnvVar{Name: "NO_PROXY", Value: "localhost"}, c.Env[3])
+	assert.Equal(t, corev1.EnvVar{Name: "no_proxy", Value: "localhost"}, c.Env[4])
 }
 
 func TestContainerResourceRequirements(t *testing.T) {
@@ -571,7 +610,7 @@ func TestContainerResourceRequirements(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Equal(t, resource.MustParse("100m"), *c.Resources.Limits.Cpu())
@@ -588,7 +627,7 @@ func TestContainerDefaultResourceRequirements(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Empty(t, c.Resources)
@@ -609,7 +648,7 @@ func TestContainerArgs(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Contains(t, c.Args, "--metrics-level=detailed")
@@ -631,7 +670,7 @@ func TestContainerOrderedArgs(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify that the first args is (always) the config, and the remaining args are ordered alphabetically
 	// by the key
@@ -652,14 +691,14 @@ func TestContainerImagePullPolicy(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Equal(t, c.ImagePullPolicy, corev1.PullIfNotPresent)
 }
 
 func TestContainerEnvFrom(t *testing.T) {
-	//prepare
+	// prepare
 	envFrom1 := corev1.EnvFromSource{
 		SecretRef: &corev1.SecretEnvSource{
 			LocalObjectReference: corev1.LocalObjectReference{
@@ -687,7 +726,7 @@ func TestContainerEnvFrom(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Contains(t, c.EnvFrom, envFrom1)
@@ -737,9 +776,8 @@ service:
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
-	// verify
 	// liveness
 	assert.Equal(t, "/", c.LivenessProbe.HTTPGet.Path)
 	assert.Equal(t, int32(13133), c.LivenessProbe.HTTPGet.Port.IntVal)
@@ -794,9 +832,8 @@ service:
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
-	// verify
 	// liveness
 	assert.Equal(t, "/", c.LivenessProbe.HTTPGet.Path)
 	assert.Equal(t, int32(13133), c.LivenessProbe.HTTPGet.Port.IntVal)
@@ -824,7 +861,7 @@ service:
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	// verify
 	assert.Equal(t, "/", c.LivenessProbe.HTTPGet.Path)
@@ -851,7 +888,7 @@ func TestContainerLifecycle(t *testing.T) {
 	cfg := config.New()
 
 	// test
-	c := Container(cfg, testLogger, otelcol, true)
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
 	expectedLifecycleHooks := corev1.Lifecycle{
 		PostStart: &corev1.LifecycleHandler{
@@ -881,38 +918,26 @@ func TestContainerWithCertManagerAvailable(t *testing.T) {
 		CertManagerAvailability: certmanager.Available,
 	}
 
-	flgs := featuregate.Flags(colfg.GlobalRegistry())
-	err := flgs.Parse([]string{"--feature-gates=operator.targetallocator.mtls"})
-	otelcol.Spec.TargetAllocator.Enabled = true
+	ta := &v1alpha1.TargetAllocator{}
+	ta.Spec.Mtls = &v1beta1.TargetAllocatorMTLS{Enabled: true}
 
-	require.NoError(t, err)
+	c := Container(cfg, testLogger, otelcol, true, ta)
 
-	// test
-	c := Container(cfg, testLogger, otelcol, true)
-
-	// verify
 	assert.Contains(t, c.VolumeMounts, corev1.VolumeMount{
 		Name:      naming.TAClientCertificate(""),
 		MountPath: constants.TACollectorTLSDirPath,
 	})
 }
 
-func TestContainerWithFeaturegateEnabledButTADisabled(t *testing.T) {
+func TestContainerWithMTLSEnabledButNilTA(t *testing.T) {
 	otelcol := v1beta1.OpenTelemetryCollector{}
 
 	cfg := config.Config{
 		CertManagerAvailability: certmanager.Available,
 	}
 
-	flgs := featuregate.Flags(colfg.GlobalRegistry())
-	err := flgs.Parse([]string{"--feature-gates=operator.targetallocator.mtls"})
+	c := Container(cfg, testLogger, otelcol, true, nil)
 
-	require.NoError(t, err)
-
-	// test
-	c := Container(cfg, testLogger, otelcol, true)
-
-	// verify
 	assert.NotContains(t, c.VolumeMounts, corev1.VolumeMount{
 		Name:      naming.TAClientCertificate(""),
 		MountPath: constants.TACollectorTLSDirPath,
@@ -923,9 +948,9 @@ func TestGetEnvironmentVariables(t *testing.T) {
 	tests := []struct {
 		name                 string
 		otelcol              v1beta1.OpenTelemetryCollector
+		cfg                  config.Config
 		enableSetGolangFlags bool
 		expectedEnvVars      []corev1.EnvVar
-		before               func(t *testing.T)
 	}{
 		{
 			name: "default environment variables",
@@ -938,6 +963,24 @@ func TestGetEnvironmentVariables(t *testing.T) {
 					ValueFrom: &corev1.EnvVarSource{
 						FieldRef: &corev1.ObjectFieldSelector{
 							FieldPath: "metadata.name",
+						},
+					},
+				},
+				{
+					Name: "GOMEMLIMIT",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.memory",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
+				{
+					Name: "GOMAXPROCS",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.cpu",
+							ContainerName: naming.Container(),
 						},
 					},
 				},
@@ -962,8 +1005,22 @@ func TestGetEnvironmentVariables(t *testing.T) {
 					},
 				},
 				{
-					Name:  "SHARD",
-					Value: "0",
+					Name: "GOMEMLIMIT",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.memory",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
+				{
+					Name: "GOMAXPROCS",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.cpu",
+							ContainerName: naming.Container(),
+						},
+					},
 				},
 			},
 		},
@@ -1055,14 +1112,36 @@ func TestGetEnvironmentVariables(t *testing.T) {
 						},
 					},
 				},
+				{
+					Name: "GOMEMLIMIT",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.memory",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
+				{
+					Name: "GOMAXPROCS",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.cpu",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
 				{Name: "HTTP_PROXY", Value: "http://proxy.example.com"},
 				{Name: "http_proxy", Value: "http://proxy.example.com"},
 				{Name: "NO_PROXY", Value: "localhost"},
 				{Name: "no_proxy", Value: "localhost"},
 			},
-			before: func(t *testing.T) {
-				t.Setenv("HTTP_PROXY", "http://proxy.example.com")
-				t.Setenv("NO_PROXY", "localhost")
+			cfg: config.Config{
+				ProxyEnvVars: []corev1.EnvVar{
+					{Name: "HTTP_PROXY", Value: "http://proxy.example.com"},
+					{Name: "http_proxy", Value: "http://proxy.example.com"},
+					{Name: "NO_PROXY", Value: "localhost"},
+					{Name: "no_proxy", Value: "localhost"},
+				},
 			},
 		},
 		{
@@ -1083,7 +1162,8 @@ service:
     pipelines:
         metrics:
             receivers: [kubeletstats]
-`)},
+`),
+				},
 			},
 			expectedEnvVars: []corev1.EnvVar{
 				{
@@ -1091,6 +1171,24 @@ service:
 					ValueFrom: &corev1.EnvVarSource{
 						FieldRef: &corev1.ObjectFieldSelector{
 							FieldPath: "metadata.name",
+						},
+					},
+				},
+				{
+					Name: "GOMEMLIMIT",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.memory",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
+				{
+					Name: "GOMAXPROCS",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.cpu",
+							ContainerName: naming.Container(),
 						},
 					},
 				},
@@ -1148,6 +1246,24 @@ service:
 					Name:  "K8S_NODE_NAME",
 					Value: "custom-node-name",
 				},
+				{
+					Name: "GOMEMLIMIT",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.memory",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
+				{
+					Name: "GOMAXPROCS",
+					ValueFrom: &corev1.EnvVarSource{
+						ResourceFieldRef: &corev1.ResourceFieldSelector{
+							Resource:      "limits.cpu",
+							ContainerName: naming.Container(),
+						},
+					},
+				},
 			},
 		},
 	}
@@ -1162,13 +1278,8 @@ service:
 				})
 			}
 
-			if test.before != nil {
-				test.before(t)
-			}
-
-			envVars := getContainerEnvVars(test.otelcol, testLogger)
+			envVars := getContainerEnvVars(test.cfg, test.otelcol, testLogger)
 			assert.ElementsMatch(t, test.expectedEnvVars, envVars)
-
 		})
 	}
 }

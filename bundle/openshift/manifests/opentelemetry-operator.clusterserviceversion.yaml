@@ -96,16 +96,16 @@ metadata:
         }
       ]
     capabilities: Deep Insights
-    categories: Logging & Tracing,Monitoring
+    categories: Logging & Tracing,Monitoring,Observability
     certified: "false"
     containerImage: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator
-    createdAt: "2025-10-27T18:11:36Z"
+    createdAt: "2026-07-13T14:23:34Z"
     description: Provides the OpenTelemetry components, including the Collector
     operators.operatorframework.io/builder: operator-sdk-v1.29.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v3
     repository: github.com/open-telemetry/opentelemetry-operator
     support: OpenTelemetry Community
-  name: opentelemetry-operator.v0.138.0
+  name: opentelemetry-operator.v0.155.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -304,7 +304,6 @@ spec:
           - ""
           resources:
           - configmaps
-          - pods
           - serviceaccounts
           - services
           verbs:
@@ -318,19 +317,21 @@ spec:
         - apiGroups:
           - ""
           resources:
-          - events
-          verbs:
-          - create
-          - patch
-        - apiGroups:
-          - ""
-          resources:
           - namespaces
+          - pods
           - secrets
           verbs:
           - get
           - list
           - watch
+        - apiGroups:
+          - ""
+          - events.k8s.io
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
         - apiGroups:
           - apps
           resources:
@@ -385,6 +386,7 @@ spec:
         - apiGroups:
           - config.openshift.io
           resources:
+          - apiservers
           - infrastructures
           - infrastructures/status
           verbs:
@@ -400,6 +402,25 @@ spec:
           - get
           - list
           - update
+        - apiGroups:
+          - discovery.k8s.io
+          resources:
+          - endpointslices
+          verbs:
+          - get
+          - list
+        - apiGroups:
+          - gateway.networking.k8s.io
+          resources:
+          - httproutes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
         - apiGroups:
           - monitoring.coreos.com
           resources:
@@ -429,20 +450,11 @@ spec:
         - apiGroups:
           - opentelemetry.io
           resources:
+          - clusterobservabilities
           - instrumentations
-          - opentelemetrycollectors
-          verbs:
-          - get
-          - list
-          - patch
-          - update
-          - watch
-        - apiGroups:
-          - opentelemetry.io
-          resources:
           - opampbridges
+          - opentelemetrycollectors
           - targetallocators
-          - targetallocators/finalizers
           verbs:
           - create
           - delete
@@ -454,12 +466,16 @@ spec:
         - apiGroups:
           - opentelemetry.io
           resources:
+          - clusterobservabilities/finalizers
           - opampbridges/finalizers
+          - targetallocators/finalizers
           verbs:
           - update
         - apiGroups:
           - opentelemetry.io
           resources:
+          - clusterobservabilities/status
+          - instrumentations/status
           - opampbridges/status
           - opentelemetrycollectors/finalizers
           - opentelemetrycollectors/status
@@ -468,6 +484,16 @@ spec:
           - get
           - patch
           - update
+        - apiGroups:
+          - operators.coreos.com
+          resources:
+          - clusterserviceversions
+          verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
         - apiGroups:
           - policy
           resources:
@@ -485,6 +511,18 @@ spec:
           resources:
           - routes
           - routes/custom-host
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - security.openshift.io
+          resources:
+          - securitycontextconstraints
           verbs:
           - create
           - delete
@@ -526,16 +564,8 @@ spec:
             spec:
               containers:
               - args:
-                - --metrics-addr=127.0.0.1:8080
-                - --enable-leader-election
                 - --zap-log-level=info
                 - --zap-time-encoding=rfc3339nano
-                - --enable-nginx-instrumentation=true
-                - --enable-go-instrumentation=true
-                - --openshift-create-dashboard=true
-                - --enable-cr-metrics=true
-                - --create-sm-operator-metrics=true
-                - --feature-gates=operator.networkpolicy,operand.networkpolicy
                 env:
                 - name: SERVICE_ACCOUNT_NAME
                   valueFrom:
@@ -545,7 +575,35 @@ spec:
                   valueFrom:
                     fieldRef:
                       fieldPath: metadata.namespace
-                image: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.138.0
+                - name: METRICS_ADDR
+                  value: :8443
+                - name: METRICS_SECURE
+                  value: "true"
+                - name: ENABLE_LEADER_ELECTION
+                  value: "true"
+                - name: ENABLE_NGINX_AUTO_INSTRUMENTATION
+                  value: "true"
+                - name: METRICS_TLS_CERT_FILE
+                  value: /var/run/tls/server/tls.crt
+                - name: METRICS_TLS_KEY_FILE
+                  value: /var/run/tls/server/tls.key
+                - name: ENABLE_WEBHOOKS
+                  value: "false"
+                - name: ENABLE_GO_AUTO_INSTRUMENTATION
+                  value: "true"
+                - name: OPENSHIFT_CREATE_DASHBOARD
+                  value: "true"
+                - name: ENABLE_CR_METRICS
+                  value: "true"
+                - name: CREATE_SM_OPERATOR_METRICS
+                  value: "true"
+                - name: FEATURE_GATES
+                  value: operator.networkpolicy,operand.networkpolicy
+                - name: TLS_CLUSTER_PROFILE
+                  value: "true"
+                - name: TLS_CONFIGURE_OPERANDS
+                  value: "true"
+                image: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.155.0
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -553,6 +611,81 @@ spec:
                   initialDelaySeconds: 15
                   periodSeconds: 20
                 name: manager
+                ports:
+                - containerPort: 9443
+                  name: webhook-server
+                  protocol: TCP
+                - containerPort: 8443
+                  name: https
+                  protocol: TCP
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 64Mi
+                volumeMounts:
+                - mountPath: /var/run/tls/server
+                  name: opentelemetry-operator-metrics-cert
+                  readOnly: true
+              serviceAccountName: opentelemetry-operator-controller-manager
+              terminationGracePeriodSeconds: 10
+              volumes:
+              - name: opentelemetry-operator-metrics-cert
+                secret:
+                  defaultMode: 420
+                  secretName: opentelemetry-operator-metrics
+      - label:
+          app.kubernetes.io/component: webhook
+          app.kubernetes.io/name: opentelemetry-operator
+        name: opentelemetry-operator-webhook
+        spec:
+          replicas: 2
+          selector:
+            matchLabels:
+              app.kubernetes.io/component: webhook
+              app.kubernetes.io/name: opentelemetry-operator
+          strategy: {}
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/component: webhook
+                app.kubernetes.io/name: opentelemetry-operator
+            spec:
+              affinity:
+                podAntiAffinity:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                  - podAffinityTerm:
+                      labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/component: webhook
+                          app.kubernetes.io/name: opentelemetry-operator
+                      topologyKey: kubernetes.io/hostname
+                    weight: 100
+              containers:
+              - args:
+                - webhook-server
+                - --zap-log-level=info
+                - --zap-time-encoding=rfc3339nano
+                env:
+                - name: ENABLE_NGINX_AUTO_INSTRUMENTATION
+                  value: "true"
+                - name: ENABLE_GO_AUTO_INSTRUMENTATION
+                  value: "true"
+                - name: FEATURE_GATES
+                  value: operand.networkpolicy
+                image: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator:0.155.0
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: webhook
                 ports:
                 - containerPort: 9443
                   name: webhook-server
@@ -569,44 +702,14 @@ spec:
                     memory: 64Mi
                 volumeMounts:
                 - mountPath: /tmp/k8s-webhook-server/serving-certs
-                  name: cert
+                  name: webhook-certs
                   readOnly: true
-              - args:
-                - --secure-listen-address=0.0.0.0:8443
-                - --upstream=http://127.0.0.1:8080/
-                - --logtostderr=true
-                - --v=0
-                - --tls-cert-file=/var/run/tls/server/tls.crt
-                - --tls-private-key-file=/var/run/tls/server/tls.key
-                - --tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,TLS_RSA_WITH_AES_128_GCM_SHA256,TLS_RSA_WITH_AES_256_GCM_SHA384,TLS_RSA_WITH_AES_128_CBC_SHA256
-                - --tls-min-version=VersionTLS12
-                image: quay.io/brancz/kube-rbac-proxy:v0.13.1
-                name: kube-rbac-proxy
-                ports:
-                - containerPort: 8443
-                  name: https
-                  protocol: TCP
-                resources:
-                  limits:
-                    cpu: 500m
-                    memory: 128Mi
-                  requests:
-                    cpu: 5m
-                    memory: 64Mi
-                volumeMounts:
-                - mountPath: /var/run/tls/server
-                  name: opentelemetry-operator-metrics-cert
               serviceAccountName: opentelemetry-operator-controller-manager
-              terminationGracePeriodSeconds: 10
               volumes:
-              - name: opentelemetry-operator-metrics-cert
+              - name: webhook-certs
                 secret:
                   defaultMode: 420
-                  secretName: opentelemetry-operator-metrics
-              - name: cert
-                secret:
-                  defaultMode: 420
-                  secretName: opentelemetry-operator-controller-manager-service-cert
+                  secretName: opentelemetry-operator-webhook-service-cert
       permissions:
       - rules:
         - apiGroups:
@@ -621,14 +724,6 @@ spec:
           - update
           - patch
           - delete
-        - apiGroups:
-          - ""
-          resources:
-          - configmaps/status
-          verbs:
-          - get
-          - update
-          - patch
         - apiGroups:
           - ""
           resources:
@@ -664,7 +759,7 @@ spec:
   minKubeVersion: 1.25.0
   provider:
     name: OpenTelemetry Community
-  version: 0.138.0
+  version: 0.155.0
   webhookdefinitions:
   - admissionReviewVersions:
     - v1alpha1
@@ -672,7 +767,7 @@ spec:
     containerPort: 443
     conversionCRDs:
     - opentelemetrycollectors.opentelemetry.io
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     generateName: copentelemetrycollectors.kb.io
     sideEffects: None
     targetPort: 9443
@@ -681,7 +776,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: minstrumentation.kb.io
     rules:
@@ -701,7 +796,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: mopampbridge.kb.io
     rules:
@@ -721,7 +816,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: mopentelemetrycollectorbeta.kb.io
     rules:
@@ -741,7 +836,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Ignore
     generateName: mpod.kb.io
     rules:
@@ -760,7 +855,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: mtargetallocatorbeta.kb.io
     rules:
@@ -780,7 +875,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: vinstrumentationcreateupdate.kb.io
     rules:
@@ -800,7 +895,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Ignore
     generateName: vinstrumentationdelete.kb.io
     rules:
@@ -819,7 +914,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: vopampbridgecreateupdate.kb.io
     rules:
@@ -839,7 +934,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Ignore
     generateName: vopampbridgedelete.kb.io
     rules:
@@ -858,7 +953,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: vopentelemetrycollectorcreateupdatebeta.kb.io
     rules:
@@ -878,7 +973,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Ignore
     generateName: vopentelemetrycollectordeletebeta.kb.io
     rules:
@@ -897,7 +992,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Fail
     generateName: vtargetallocatorcreateupdatebeta.kb.io
     rules:
@@ -917,7 +1012,7 @@ spec:
   - admissionReviewVersions:
     - v1
     containerPort: 443
-    deploymentName: opentelemetry-operator-controller-manager
+    deploymentName: opentelemetry-operator-webhook
     failurePolicy: Ignore
     generateName: vtargetallocatordeletebeta.kb.io
     rules:

@@ -6,6 +6,7 @@ package allocation
 import (
 	"context"
 	"errors"
+	"maps"
 	"runtime"
 	"slices"
 	"sync"
@@ -92,17 +93,11 @@ type allocator struct {
 
 	log logr.Logger
 
-	filter                Filter
 	targetsPerCollector   metric.Int64Gauge
 	collectorsAllocatable metric.Int64Gauge
 	timeToAssign          metric.Float64Histogram
 	targetsRemaining      metric.Int64Gauge
 	targetsUnassigned     metric.Int64Gauge
-}
-
-// SetFilter sets the filtering hook to use.
-func (a *allocator) SetFilter(filter Filter) {
-	a.filter = filter
 }
 
 // SetFallbackStrategy sets the fallback strategy to use.
@@ -118,10 +113,6 @@ func (a *allocator) SetTargets(targets []*target.Item) {
 	defer func() {
 		a.timeToAssign.Record(context.Background(), time.Since(begin).Seconds(), metric.WithAttributes(attribute.String("method", "SetTargets"), attribute.String("strategy", a.strategy.GetName())))
 	}()
-
-	if a.filter != nil {
-		targets = a.filter.Apply(targets)
-	}
 
 	a.targetsRemaining.Record(context.Background(), int64(len(targets)))
 	concurrency := runtime.NumCPU() * 2 // determined experimentally
@@ -161,7 +152,7 @@ func (a *allocator) SetCollectors(collectors map[string]*Collector) {
 	}
 }
 
-func (a *allocator) GetTargetsForCollectorAndJob(collector string, job string) []*target.Item {
+func (a *allocator) GetTargetsForCollectorAndJob(collector, job string) []*target.Item {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	if _, ok := a.targetItemsPerJobPerCollector[collector]; !ok {
@@ -185,9 +176,7 @@ func (a *allocator) TargetItems() map[target.ItemHash]*target.Item {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	targetItemsCopy := make(map[target.ItemHash]*target.Item)
-	for k, v := range a.targetItems {
-		targetItemsCopy[k] = v
-	}
+	maps.Copy(targetItemsCopy, a.targetItems)
 	return targetItemsCopy
 }
 
@@ -196,9 +185,7 @@ func (a *allocator) Collectors() map[string]*Collector {
 	a.m.RLock()
 	defer a.m.RUnlock()
 	collectorsCopy := make(map[string]*Collector)
-	for k, v := range a.collectors {
-		collectorsCopy[k] = v
-	}
+	maps.Copy(collectorsCopy, a.collectors)
 	return collectorsCopy
 }
 
@@ -218,16 +205,16 @@ func (a *allocator) handleTargets(diff diff.Changes[target.ItemHash, *target.Ite
 	var assignmentErrors []error
 	for k, item := range diff.Additions() {
 		// Do nothing if the item is already there
-		if _, ok := a.targetItems[k]; ok {
+		_, ok := a.targetItems[k]
+		if ok {
 			continue
-		} else {
-			// TODO: track target -> collector relationship in a separate map
-			item.CollectorName = ""
-			// Add item to item pool and assign a collector
-			err := a.addTargetToTargetItems(item)
-			if err != nil {
-				assignmentErrors = append(assignmentErrors, err)
-			}
+		}
+		// TODO: track target -> collector relationship in a separate map
+		item.CollectorName = ""
+		// Add item to item pool and assign a collector
+		err := a.addTargetToTargetItems(item)
+		if err != nil {
+			assignmentErrors = append(assignmentErrors, err)
 		}
 	}
 
@@ -261,6 +248,7 @@ func (a *allocator) addTargetToTargetItems(tg *target.Item) error {
 	tg.CollectorName = colOwner.Name
 	a.addCollectorTargetItemMapping(tg)
 	a.collectors[colOwner.Name].NumTargets++
+	a.collectors[colOwner.Name].TargetsPerJob[tg.JobName]++
 	a.targetsPerCollector.Record(context.Background(), int64(a.collectors[colOwner.String()].NumTargets), metric.WithAttributes(attribute.String("collector_name", colOwner.String()), attribute.String("strategy", a.strategy.GetName())))
 	return nil
 }
@@ -276,6 +264,10 @@ func (a *allocator) unassignTargetItem(item *target.Item) {
 		return
 	}
 	c.NumTargets--
+	c.TargetsPerJob[item.JobName]--
+	if c.TargetsPerJob[item.JobName] == 0 {
+		delete(c.TargetsPerJob, item.JobName)
+	}
 	a.targetsPerCollector.Record(context.Background(), int64(c.NumTargets), metric.WithAttributes(attribute.String("collector_name", item.CollectorName), attribute.String("strategy", a.strategy.GetName())))
 	delete(a.targetItemsPerJobPerCollector[item.CollectorName][item.JobName], item.Hash())
 	if len(a.targetItemsPerJobPerCollector[item.CollectorName][item.JobName]) == 0 {

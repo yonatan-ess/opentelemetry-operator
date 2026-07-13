@@ -882,7 +882,8 @@ func TestSDKInjection(t *testing.T) {
 			inj := sdkInjector{
 				client: k8sClient,
 			}
-			pod := inj.injectCommonSDKConfig(context.Background(), test.inst, corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: test.pod.Namespace}}, test.pod, 0, 0)
+			testContainer := &test.pod.Spec.Containers[0]
+			pod := inj.injectCommonSDKConfig(context.Background(), test.inst, corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: test.pod.Namespace}}, test.pod, testContainer, testContainer)
 			_, err = json.MarshalIndent(pod, "", "  ")
 			assert.NoError(t, err)
 			assert.Equal(t, test.expected, pod)
@@ -1425,7 +1426,7 @@ func TestInjectDotNet(t *testing.T) {
 
 func TestInjectGo(t *testing.T) {
 	falsee := false
-	true := true
+	truee := true
 	zero := int64(0)
 
 	tests := []struct {
@@ -1535,7 +1536,7 @@ func TestInjectGo(t *testing.T) {
 			},
 			expected: corev1.Pod{
 				Spec: corev1.PodSpec{
-					ShareProcessNamespace: &true,
+					ShareProcessNamespace: &truee,
 					Containers: []corev1.Container{
 						{
 							Name:  "app",
@@ -1546,7 +1547,7 @@ func TestInjectGo(t *testing.T) {
 							Image: "otel/go:1",
 							SecurityContext: &corev1.SecurityContext{
 								RunAsUser:  &zero,
-								Privileged: &true,
+								Privileged: &truee,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -1652,7 +1653,7 @@ func TestInjectGo(t *testing.T) {
 					},
 				},
 				Spec: corev1.PodSpec{
-					ShareProcessNamespace: &true,
+					ShareProcessNamespace: &truee,
 					Containers: []corev1.Container{
 						{
 							Name:  "app",
@@ -1663,7 +1664,7 @@ func TestInjectGo(t *testing.T) {
 							Image: "otel/go:1",
 							SecurityContext: &corev1.SecurityContext{
 								RunAsUser:  &zero,
-								Privileged: &true,
+								Privileged: &truee,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -1775,7 +1776,7 @@ func TestInjectGo(t *testing.T) {
 					},
 				},
 				Spec: corev1.PodSpec{
-					ShareProcessNamespace: &true,
+					ShareProcessNamespace: &truee,
 					Containers: []corev1.Container{
 						{
 							Name:  "istio-proxy",
@@ -1790,7 +1791,7 @@ func TestInjectGo(t *testing.T) {
 							Image: "otel/go:1",
 							SecurityContext: &corev1.SecurityContext{
 								RunAsUser:  &zero,
-								Privileged: &true,
+								Privileged: &truee,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
@@ -1874,7 +1875,6 @@ func TestInjectGo(t *testing.T) {
 }
 
 func TestInjectApacheHttpd(t *testing.T) {
-
 	tests := []struct {
 		name     string
 		insts    languageInstrumentations
@@ -1932,8 +1932,7 @@ func TestInjectApacheHttpd(t *testing.T) {
 						{
 							Name:    apacheAgentCloneContainerName,
 							Image:   "",
-							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /usr/local/apache2/conf/* " + apacheAgentDirectory + apacheAgentConfigDirectory},
+							Command: []string{"cp", "-r", "/usr/local/apache2/conf/.", apacheAgentDirectory + apacheAgentConfigDirectory},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      apacheAgentConfigVolume,
 								MountPath: apacheAgentDirectory + apacheAgentConfigDirectory,
@@ -1943,14 +1942,14 @@ func TestInjectApacheHttpd(t *testing.T) {
 							Name:    apacheAgentInitContainerName,
 							Image:   "img:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args: []string{
-								"cp -r /opt/opentelemetry/* /opt/opentelemetry-webserver/agent && export agentLogDir=$(echo \"/opt/opentelemetry-webserver/agent/logs\" | sed 's,/,\\\\/,g') && cat /opt/opentelemetry-webserver/agent/conf/opentelemetry_sdk_log4cxx.xml.template | sed 's/__agent_log_dir__/'${agentLogDir}'/g'  > /opt/opentelemetry-webserver/agent/conf/opentelemetry_sdk_log4cxx.xml &&echo \"$OTEL_APACHE_AGENT_CONF\" > /opt/opentelemetry-webserver/source-conf/opentemetry_agent.conf && sed -i 's/<<SID-PLACEHOLDER>>/'${APACHE_SERVICE_INSTANCE_ID}'/g' /opt/opentelemetry-webserver/source-conf/opentemetry_agent.conf && echo -e '\nInclude /usr/local/apache2/conf/opentemetry_agent.conf' >> /opt/opentelemetry-webserver/source-conf/httpd.conf"},
+							Args:    []string{apacheHttpdAgentScript, "--", "/usr/local/apache2/conf"},
 							Env: []corev1.EnvVar{
 								{
 									Name:  apacheAttributesEnvVar,
 									Value: "\n#Load the Otel Webserver SDK\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_common.so\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_resources.so\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_trace.so\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_otlp_recordable.so\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_exporter_ostream_span.so\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_exporter_otlp_grpc.so\n#Load the Otel ApacheModule SDK\nLoadFile /opt/opentelemetry-webserver/agent/sdk_lib/lib/libopentelemetry_webserver_sdk.so\n#Load the Apache Module. In this example for Apache 2.4\n#LoadModule otel_apache_module /opt/opentelemetry-webserver/agent/WebServerModule/Apache/libmod_apache_otel.so\n#Load the Apache Module. In this example for Apache 2.2\n#LoadModule otel_apache_module /opt/opentelemetry-webserver/agent/WebServerModule/Apache/libmod_apache_otel22.so\nLoadModule otel_apache_module /opt/opentelemetry-webserver/agent/WebServerModule/Apache/libmod_apache_otel.so\n#Attributes\nApacheModuleEnabled ON\nApacheModuleOtelExporterEndpoint https://collector:4318\nApacheModuleOtelSpanExporter otlp\nApacheModuleResolveBackends  ON\nApacheModuleServiceInstanceId <<SID-PLACEHOLDER>>\nApacheModuleServiceName app\nApacheModuleServiceNamespace ns\nApacheModuleTraceAsError  ON\n",
 								},
-								{Name: apacheServiceInstanceIdEnvVar,
+								{
+									Name: apacheServiceInstanceIdEnvVar,
 									ValueFrom: &corev1.EnvVarSource{
 										FieldRef: &corev1.ObjectFieldSelector{
 											FieldPath: "metadata.name",
@@ -2048,7 +2047,6 @@ func TestInjectApacheHttpd(t *testing.T) {
 }
 
 func TestInjectNginx(t *testing.T) {
-
 	tests := []struct {
 		name     string
 		insts    languageInstrumentations
@@ -2113,7 +2111,7 @@ func TestInjectNginx(t *testing.T) {
 							Name:    nginxAgentCloneContainerName,
 							Image:   "",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{"cp -r /etc/nginx/* /opt/opentelemetry-webserver/source-conf && export NGINX_VERSION=\"$( { nginx -v ; } 2>&1 )\" && echo ${NGINX_VERSION##*/} > /opt/opentelemetry-webserver/source-conf/version.txt"},
+							Args:    []string{nginxCloneScript, "--", "/etc/nginx"},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      nginxAgentConfigVolume,
 								MountPath: nginxAgentConfDirFull,
@@ -2123,15 +2121,11 @@ func TestInjectNginx(t *testing.T) {
 							Name:    nginxAgentInitContainerName,
 							Image:   "img:1",
 							Command: []string{"/bin/sh", "-c"},
-							Args:    []string{nginxSdkInitContainerTestCommand},
+							Args:    nginxSdkInitContainerTestArgs,
 							Env: []corev1.EnvVar{
 								{
 									Name:  nginxAttributesEnvVar,
 									Value: "NginxModuleEnabled ON;\nNginxModuleOtelExporterEndpoint http://otlp-endpoint:4317;\nNginxModuleOtelMaxQueueSize 4096;\nNginxModuleOtelSpanExporter otlp;\nNginxModuleResolveBackends ON;\nNginxModuleServiceInstanceId <<SID-PLACEHOLDER>>;\nNginxModuleServiceName my-nginx-6c44bcbdd;\nNginxModuleServiceNamespace ns;\nNginxModuleTraceAsError ON;\n",
-								},
-								{
-									Name:  "OTEL_NGINX_I13N_SCRIPT",
-									Value: nginxSdkInitContainerI13nScript,
 								},
 								{
 									Name: nginxServiceInstanceIdEnvVar,
@@ -2437,7 +2431,7 @@ func TestParentResourceLabels(t *testing.T) {
 						},
 					},
 					Spec: batchv1.JobSpec{
-						Suspend: ptr.To[bool](true),
+						Suspend: new(true),
 						Template: corev1.PodTemplateSpec{
 							Spec: corev1.PodSpec{
 								RestartPolicy: corev1.RestartPolicyNever,
@@ -2667,7 +2661,7 @@ func TestChooseServiceName(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			serviceName := chooseServiceName(corev1.Pod{
+			pod := corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: test.labelValue,
 					Annotations: map[string]string{
@@ -2680,7 +2674,8 @@ func TestChooseServiceName(t *testing.T) {
 						{Name: "2nd"},
 					},
 				},
-			}, test.useLabelsForResourceAttributes, test.resources, test.index)
+			}
+			serviceName := chooseServiceName(pod, test.useLabelsForResourceAttributes, test.resources, &pod.Spec.Containers[test.index])
 
 			assert.Equal(t, test.expectedServiceName, serviceName)
 		})

@@ -15,8 +15,11 @@ var args = os.Args[1:]
 
 func CreateCLIParser(cfg Config) *pflag.FlagSet {
 	f := pflag.NewFlagSet(os.Args[0], pflag.ContinueOnError)
-	f.ParseErrorsWhitelist.UnknownFlags = true
+	f.ParseErrorsAllowlist.UnknownFlags = true
 	f.String("metrics-addr", cfg.MetricsAddr, "The address the metric endpoint binds to.")
+	f.Bool("metrics-secure", cfg.MetricsSecure, "Enable secure serving for metrics endpoint with authentication and authorization. When enabled ano no TLS certificates are provided, the operator generates self signed certificates.")
+	f.String("metrics-tls-cert-file", cfg.MetricsTLSCertFile, "TLS certificate file for the metrics server")
+	f.String("metrics-tls-key-file", cfg.MetricsTLSKeyFile, "TLS private key file for the metrics server")
 	f.String("health-probe-addr", cfg.ProbeAddr, "The address the probe endpoint binds to.")
 	f.String("pprof-addr", cfg.PprofAddr, "The address to expose the pprof server. Default is empty string which disables the pprof server.")
 	f.Bool("enable-leader-election", cfg.EnableLeaderElection,
@@ -49,6 +52,8 @@ func CreateCLIParser(cfg Config) *pflag.FlagSet {
 	f.StringArray("annotations-filter", cfg.AnnotationsFilter, "Annotations to filter away from propagating onto deploys. It should be a string array containing patterns, which are literal strings optionally containing a * wildcard character. Example: --annotations-filter=.*filter.out will filter out annotations that looks like: annotation.filter.out: true")
 	f.String("fips-disabled-components", cfg.FipsDisabledComponents, "Disabled collector components when operator runs on FIPS enabled platform. Example flag value =receiver.foo,receiver.bar,exporter.baz")
 	f.Int("webhook-port", cfg.WebhookPort, "The port the webhook endpoint binds to.")
+	f.Bool("tls-cluster-profile", false, "Retrieves the TLS profile (min version and ciphers) from the cluster. Supported only on OpenShift clusters. The TLS profile is obtained from APIServer CR.")
+	f.Bool("tls-configure-operands", false, "Configures TLS version and cyphers in operands.")
 	f.String("tls-min-version", "VersionTLS12", "Minimum TLS version supported. Value must match version names from https://golang.org/pkg/crypto/tls/#pkg-constants.")
 	f.StringSlice("tls-cipher-suites", nil, "Comma-separated list of cipher suites for the server. Values are from tls package constants (https://golang.org/pkg/crypto/tls/#pkg-constants). If omitted, the default Go cipher suites will be used")
 	f.String("zap-message-key", "message", "The message key to be used in the customized Log Encoder")
@@ -56,12 +61,13 @@ func CreateCLIParser(cfg Config) *pflag.FlagSet {
 	f.String("zap-time-key", "timestamp", "The time key to be used in the customized Log Encoder")
 	f.String("zap-level-format", "uppercase", "The level format to be used in the customized Log Encoder")
 	f.Bool("enable-webhooks", cfg.EnableWebhooks, "Enable webhooks for the controllers")
+	f.String("watch-namespace", cfg.WatchNamespace, "Comma-separated list of namespaces the operator should watch for CustomResources. Empty means watch all namespaces.")
+	f.Int32("openshift-webhook-replicas", cfg.OpenShiftWebhookReplicas, "Number of replicas for the standalone pod webhook deployment on OpenShift. Set 0 to disable.")
 
 	return f
 }
 
 func ApplyCLI(cfg *Config) error {
-
 	f := CreateCLIParser(*cfg)
 	err := f.Parse(args)
 	if err != nil {
@@ -110,13 +116,19 @@ func ApplyCLI(cfg *Config) error {
 			case "auto-instrumentation-nginx-image":
 				cfg.AutoInstrumentationNginxImage, _ = f.GetString("auto-instrumentation-nginx-image")
 			case "labels-filter":
-				cfg.LabelsFilter, _ = f.GetStringSlice("labels-filter")
+				cfg.LabelsFilter, _ = f.GetStringArray("labels-filter")
 			case "annotations-filter":
-				cfg.AnnotationsFilter, _ = f.GetStringSlice("annotations-filter")
+				cfg.AnnotationsFilter, _ = f.GetStringArray("annotations-filter")
 			case "openshift-create-dashboard":
 				cfg.OpenshiftCreateDashboard, _ = f.GetBool("openshift-create-dashboard")
 			case "metrics-addr":
 				cfg.MetricsAddr, _ = f.GetString("metrics-addr")
+			case "metrics-secure":
+				cfg.MetricsSecure, _ = f.GetBool("metrics-secure")
+			case "metrics-tls-cert-file":
+				cfg.MetricsTLSCertFile, _ = f.GetString("metrics-tls-cert-file")
+			case "metrics-tls-key-file":
+				cfg.MetricsTLSKeyFile, _ = f.GetString("metrics-tls-key-file")
 			case "health-probe-addr":
 				cfg.ProbeAddr, _ = f.GetString("health-probe-addr")
 			case "pprof-addr":
@@ -131,6 +143,10 @@ func ApplyCLI(cfg *Config) error {
 				cfg.WebhookPort, _ = f.GetInt("webhook-port")
 			case "fips-disabled-components":
 				cfg.FipsDisabledComponents, _ = f.GetString("fips-disabled-components")
+			case "tls-cluster-profile":
+				cfg.TLS.UseClusterProfile, _ = f.GetBool("tls-cluster-profile")
+			case "tls-configure-operands":
+				cfg.TLS.ConfigureOperands, _ = f.GetBool("tls-configure-operands")
 			case "min-tls-version":
 				cfg.TLS.MinVersion, _ = f.GetString("min-tls-version")
 			case "tls-cipher-suites":
@@ -145,6 +161,17 @@ func ApplyCLI(cfg *Config) error {
 				cfg.Zap.LevelFormat, _ = f.GetString("zap-level-format")
 			case "enable-webhooks":
 				cfg.EnableWebhooks, _ = f.GetBool("enable-webhooks")
+			case "watch-namespace":
+				cfg.WatchNamespace, _ = f.GetString("watch-namespace")
+			case "create-rbac-permissions":
+				val, _ := f.GetBool("create-rbac-permissions")
+				if val {
+					cfg.CreateRBACPermissions = autoRBAC.Available
+				} else {
+					cfg.CreateRBACPermissions = autoRBAC.NotAvailable
+				}
+			case "openshift-webhook-replicas":
+				cfg.OpenShiftWebhookReplicas, _ = f.GetInt32("openshift-webhook-replicas")
 			}
 		}
 	})

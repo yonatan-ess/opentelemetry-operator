@@ -5,6 +5,7 @@ package controllers_test
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"regexp"
 	"slices"
@@ -22,12 +23,13 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyV1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -35,12 +37,14 @@ import (
 	runtimecluster "sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	k8sreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1alpha1"
 	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/openshift"
 	"github.com/open-telemetry/opentelemetry-operator/internal/autodetect/prometheus"
 	autoRBAC "github.com/open-telemetry/opentelemetry-operator/internal/autodetect/rbac"
+	"github.com/open-telemetry/opentelemetry-operator/internal/components"
 	"github.com/open-telemetry/opentelemetry-operator/internal/config"
 	"github.com/open-telemetry/opentelemetry-operator/internal/controllers"
 	"github.com/open-telemetry/opentelemetry-operator/internal/manifests"
@@ -59,28 +63,26 @@ const (
 	annotationVal  = "true"
 )
 
-var (
-	extraPorts = v1alpha1.PortsSpec{
-		ServicePort: v1.ServicePort{
-			Name:       "port-web",
-			Protocol:   "TCP",
-			Port:       8080,
-			TargetPort: intstr.FromInt32(8080),
-		},
-	}
-)
+var extraPorts = v1beta1.PortsSpec{
+	ServicePort: v1.ServicePort{
+		Name:       "port-web",
+		Protocol:   "TCP",
+		Port:       8080,
+		TargetPort: intstr.FromInt32(8080),
+	},
+}
 
 type check[T any] func(t *testing.T, params T)
 
 func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
-	addedMetadataDeployment := testCollectorWithMode("test-deployment", v1alpha1.ModeDeployment)
+	addedMetadataDeployment := testCollectorWithMode(t, "test-deployment", v1beta1.ModeDeployment)
 	addedMetadataDeployment.Labels = map[string]string{
 		labelName: labelVal,
 	}
 	addedMetadataDeployment.Annotations = map[string]string{
 		annotationName: annotationVal,
 	}
-	deploymentExtraPorts := testCollectorWithModeAndReplicas("test-deployment", v1alpha1.ModeDeployment, 3)
+	deploymentExtraPorts := testCollectorWithModeAndReplicas(t, "test-deployment", v1beta1.ModeDeployment, 3)
 	deploymentExtraPorts.Spec.Ports = append(deploymentExtraPorts.Spec.Ports, extraPorts)
 	deploymentExtraPorts.Spec.DeploymentUpdateStrategy = appsv1.DeploymentStrategy{
 		RollingUpdate: &appsv1.RollingUpdateDeployment{
@@ -105,26 +107,26 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 	updatedIngressParams.Spec.Ingress.Annotations = map[string]string{"blub": "blob"}
 	updatedIngressParams.Spec.Ingress.Hostname = expectHostname
 	routeParams := testCollectorAssertNoErr(t, "test-route", "", testFileIngress)
-	routeParams.Spec.Ingress.Type = v1alpha1.IngressTypeRoute
-	routeParams.Spec.Ingress.Route.Termination = v1alpha1.TLSRouteTerminationTypeInsecure
+	routeParams.Spec.Ingress.Type = v1beta1.IngressTypeRoute
+	routeParams.Spec.Ingress.Route.Termination = v1beta1.TLSRouteTerminationTypeInsecure
 	updatedRouteParams := testCollectorAssertNoErr(t, "test-route", "", testFileIngress)
-	updatedRouteParams.Spec.Ingress.Type = v1alpha1.IngressTypeRoute
-	updatedRouteParams.Spec.Ingress.Route.Termination = v1alpha1.TLSRouteTerminationTypeInsecure
+	updatedRouteParams.Spec.Ingress.Type = v1beta1.IngressTypeRoute
+	updatedRouteParams.Spec.Ingress.Route.Termination = v1beta1.TLSRouteTerminationTypeInsecure
 	updatedRouteParams.Spec.Ingress.Hostname = expectHostname
-	deletedParams := testCollectorWithMode("test2", v1alpha1.ModeDeployment)
+	deletedParams := testCollectorWithMode(t, "test2", v1beta1.ModeDeployment)
 	now := metav1.NewTime(time.Now())
 	deletedParams.DeletionTimestamp = &now
 
 	type args struct {
-		params v1alpha1.OpenTelemetryCollector
+		params v1beta1.OpenTelemetryCollector
 		// an optional list of updates to supply after the initial object
-		updates []v1alpha1.OpenTelemetryCollector
+		updates []v1beta1.OpenTelemetryCollector
 	}
 	type want struct {
 		// result check
 		result controllerruntime.Result
 		// a check to run against the current state applied
-		checks []check[v1alpha1.OpenTelemetryCollector]
+		checks []check[v1beta1.OpenTelemetryCollector]
 		// if an error from creation validation is expected
 		validateErr assert.ErrorAssertionFunc
 		// if an error from reconciliation is expected
@@ -139,13 +141,13 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "deployment collector",
 			args: args{
 				params:  addedMetadataDeployment,
-				updates: []v1alpha1.OpenTelemetryCollector{deploymentExtraPorts},
+				updates: []v1beta1.OpenTelemetryCollector{deploymentExtraPorts},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							d := appsv1.Deployment{}
 							exists, err := populateObjectIfExists(t, &d, namespacedObjectName(naming.Collector(params.Name), params.Namespace))
 							assert.NoError(t, err)
@@ -184,8 +186,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							d := appsv1.Deployment{}
 							exists, err := populateObjectIfExists(t, &d, namespacedObjectName(naming.Collector(params.Name), params.Namespace))
 							assert.NoError(t, err)
@@ -230,13 +232,13 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "otlp receiver collector",
 			args: args{
 				params:  baseOTLPParams,
-				updates: []v1alpha1.OpenTelemetryCollector{},
+				updates: []v1beta1.OpenTelemetryCollector{},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							d := appsv1.StatefulSet{}
 							exists, err := populateObjectIfExists(t, &d, namespacedObjectName(naming.Collector(params.Name), params.Namespace))
 							assert.NoError(t, err)
@@ -263,15 +265,15 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		{
 			name: "invalid mode",
 			args: args{
-				params:  testCollectorWithMode("test-invalid", "bad"),
-				updates: []v1alpha1.OpenTelemetryCollector{},
+				params:  testCollectorWithMode(t, "test-invalid", "bad"),
+				updates: []v1beta1.OpenTelemetryCollector{},
 			},
 			want: []want{
 				{
 					result:  controllerruntime.Result{},
-					checks:  []check[v1alpha1.OpenTelemetryCollector]{},
+					checks:  []check[v1beta1.OpenTelemetryCollector]{},
 					wantErr: assert.NoError,
-					validateErr: func(t assert.TestingT, err2 error, msgAndArgs ...interface{}) bool {
+					validateErr: func(t assert.TestingT, err2 error, msgAndArgs ...any) bool {
 						return assert.ErrorContains(t, err2, "Unsupported value: \"bad\"", msgAndArgs)
 					},
 				},
@@ -281,14 +283,14 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "invalid prometheus configuration",
 			args: args{
 				params:  testCollectorAssertNoErr(t, "test-invalid-prom", baseTaImage, testFileIngress),
-				updates: []v1alpha1.OpenTelemetryCollector{},
+				updates: []v1beta1.OpenTelemetryCollector{},
 			},
 			want: []want{
 				{
 					result:  controllerruntime.Result{},
-					checks:  []check[v1alpha1.OpenTelemetryCollector]{},
+					checks:  []check[v1beta1.OpenTelemetryCollector]{},
 					wantErr: assert.NoError,
-					validateErr: func(t assert.TestingT, err2 error, msgAndArgs ...interface{}) bool {
+					validateErr: func(t assert.TestingT, err2 error, msgAndArgs ...any) bool {
 						return assert.ErrorContains(t, err2, "no prometheus available as part of the configuration", msgAndArgs)
 					},
 				},
@@ -298,13 +300,13 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "deployment collector with ingress",
 			args: args{
 				params:  ingressParams,
-				updates: []v1alpha1.OpenTelemetryCollector{updatedIngressParams},
+				updates: []v1beta1.OpenTelemetryCollector{updatedIngressParams},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							d := networkingv1.Ingress{}
 							exists, err := populateObjectIfExists(t, &d, namespacedObjectName(naming.Ingress(params.Name), params.Namespace))
 							assert.NoError(t, err)
@@ -316,8 +318,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							d := networkingv1.Ingress{}
 							exists, err := populateObjectIfExists(t, &d, namespacedObjectName(naming.Ingress(params.Name), params.Namespace))
 							assert.NoError(t, err)
@@ -334,13 +336,13 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "deployment collector with routes",
 			args: args{
 				params:  routeParams,
-				updates: []v1alpha1.OpenTelemetryCollector{updatedRouteParams},
+				updates: []v1beta1.OpenTelemetryCollector{updatedRouteParams},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							got := routev1.Route{}
 							nsn := types.NamespacedName{Namespace: params.Namespace, Name: "otlp-grpc-test-route-route"}
 							exists, err := populateObjectIfExists(t, &got, nsn)
@@ -353,8 +355,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							got := routev1.Route{}
 							nsn := types.NamespacedName{Namespace: params.Namespace, Name: "otlp-grpc-test-route-route"}
 							exists, err := populateObjectIfExists(t, &got, nsn)
@@ -371,14 +373,14 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		{
 			name: "hpa v2 deployment collector",
 			args: args{
-				params:  testCollectorWithHPA(3, 5),
-				updates: []v1alpha1.OpenTelemetryCollector{testCollectorWithHPA(1, 9)},
+				params:  testCollectorWithHPA(t, 3, 5),
+				updates: []v1beta1.OpenTelemetryCollector{testCollectorWithHPA(t, 1, 9)},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							actual := autoscalingv2.HorizontalPodAutoscaler{}
 							exists, hpaErr := populateObjectIfExists(t, &actual, namespacedObjectName(naming.HorizontalPodAutoscaler(params.Name), params.Namespace))
 							assert.NoError(t, hpaErr)
@@ -394,8 +396,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							actual := autoscalingv2.HorizontalPodAutoscaler{}
 							exists, hpaErr := populateObjectIfExists(t, &actual, namespacedObjectName(naming.HorizontalPodAutoscaler(params.Name), params.Namespace))
 							assert.NoError(t, hpaErr)
@@ -414,14 +416,14 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		{
 			name: "policy v1 deployment collector",
 			args: args{
-				params:  testCollectorWithModeAndReplicas("policytest", v1alpha1.ModeDeployment, 3),
-				updates: []v1alpha1.OpenTelemetryCollector{testCollectorWithPDB(1, 0)},
+				params:  testCollectorWithModeAndReplicas(t, "policytest", v1beta1.ModeDeployment, 3),
+				updates: []v1beta1.OpenTelemetryCollector{testCollectorWithPDB(t, 1, 0)},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							actual := policyV1.PodDisruptionBudget{}
 							exists, pdbErr := populateObjectIfExists(t, &actual, namespacedObjectName(naming.HorizontalPodAutoscaler(params.Name), params.Namespace))
 							assert.NoError(t, pdbErr)
@@ -435,8 +437,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							actual := policyV1.PodDisruptionBudget{}
 							exists, pdbErr := populateObjectIfExists(t, &actual, namespacedObjectName(naming.HorizontalPodAutoscaler(params.Name), params.Namespace))
 							assert.NoError(t, pdbErr)
@@ -453,13 +455,13 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		{
 			name: "daemonset collector",
 			args: args{
-				params: testCollectorWithMode("test-daemonset", v1alpha1.ModeDaemonSet),
+				params: testCollectorWithMode(t, "test-daemonset", v1beta1.ModeDaemonSet),
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							exists, err := populateObjectIfExists(t, &appsv1.DaemonSet{}, namespacedObjectName(naming.Collector(params.Name), params.Namespace))
 							assert.NoError(t, err)
 							assert.True(t, exists)
@@ -473,8 +475,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		{
 			name: "stateful should update collector with TA",
 			args: args{
-				params: testCollectorWithMode("test-stateful-ta", v1alpha1.ModeStatefulSet),
-				updates: []v1alpha1.OpenTelemetryCollector{
+				params: testCollectorWithMode(t, "test-stateful-ta", v1beta1.ModeStatefulSet),
+				updates: []v1beta1.OpenTelemetryCollector{
 					testCollectorAssertNoErr(t, "test-stateful-ta", baseTaImage, promFile),
 					testCollectorAssertNoErr(t, "test-stateful-ta", baseTaImage, updatedPromFile),
 					testCollectorAssertNoErr(t, "test-stateful-ta", updatedTaImage, updatedPromFile),
@@ -483,8 +485,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							configHash, _ := getConfigMapSHAFromString(params.Spec.Config)
 							configHash = configHash[:8]
 							exists, err := populateObjectIfExists(t, &v1.ConfigMap{}, namespacedObjectName(naming.ConfigMap(params.Name, configHash), params.Namespace))
@@ -504,8 +506,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							configHash, _ := getConfigMapSHAFromString(params.Spec.Config)
 							configHash = configHash[:8]
 							exists, err := populateObjectIfExists(t, &v1.ConfigMap{}, namespacedObjectName(naming.ConfigMap(params.Name, configHash), params.Namespace))
@@ -541,7 +543,6 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 							assert.Equal(t, expected.Spec.AllocationStrategy, actual.Spec.AllocationStrategy)
 							assert.Equal(t, expected.Spec.FilterStrategy, actual.Spec.FilterStrategy)
 							assert.Equal(t, expected.Spec.ScrapeConfigs, actual.Spec.ScrapeConfigs)
-
 						},
 					},
 					wantErr:     assert.NoError,
@@ -549,8 +550,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							configHash, _ := getConfigMapSHAFromString(params.Spec.Config)
 							configHash = configHash[:8]
 							exists, err := populateObjectIfExists(t, &v1.ConfigMap{}, namespacedObjectName(naming.ConfigMap(params.Name, configHash), params.Namespace))
@@ -568,8 +569,8 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				},
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
 							actual := v1alpha1.TargetAllocator{}
 							exists, err := populateObjectIfExists(t, &actual, namespacedObjectName(params.Name, params.Namespace))
 							require.NoError(t, err)
@@ -586,14 +587,14 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			name: "collector is being deleted",
 			args: args{
 				params:  deletedParams,
-				updates: []v1alpha1.OpenTelemetryCollector{},
+				updates: []v1beta1.OpenTelemetryCollector{},
 			},
 			want: []want{
 				{
 					result: controllerruntime.Result{},
-					checks: []check[v1alpha1.OpenTelemetryCollector]{
-						func(t *testing.T, params v1alpha1.OpenTelemetryCollector) {
-							o := v1alpha1.OpenTelemetryCollector{}
+					checks: []check[v1beta1.OpenTelemetryCollector]{
+						func(t *testing.T, params v1beta1.OpenTelemetryCollector) {
+							o := v1beta1.OpenTelemetryCollector{}
 							exists, err := populateObjectIfExists(t, &o, namespacedObjectName(naming.Collector(params.Name), params.Namespace))
 							assert.NoError(t, err)
 							assert.False(t, exists) // There should be no collector anymore
@@ -606,12 +607,10 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			testContext := context.Background()
 			nsn := types.NamespacedName{Name: tt.args.params.Name, Namespace: tt.args.params.Namespace}
-			testCtx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			testCtx := t.Context()
 
 			cfg := config.Config{
 				CollectorImage:                "default-collector",
@@ -620,6 +619,7 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				PrometheusCRAvailability:      prometheus.Available,
 				TargetAllocatorConfigMapEntry: "remoteconfiguration.yaml",
 				CollectorConfigMapEntry:       "collector.yaml",
+				EnableInstrumentationCRDs:     true,
 			}
 			reconciler := createTestReconciler(t, testCtx, cfg)
 
@@ -662,10 +662,12 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 			for _, check := range firstCheck.checks {
 				check(t, tt.args.params)
 			}
+			if createErr == nil && deletionTimestamp == nil {
+				assertCollectorReadyStatus(t, nsn)
+			}
 			// run the next set of checks
 			for pid, updateParam := range tt.args.updates {
-				updateParam := updateParam
-				existing := v1alpha1.OpenTelemetryCollector{}
+				existing := v1beta1.OpenTelemetryCollector{}
 				found, err := populateObjectIfExists(t, &existing, nsn)
 				assert.True(t, found)
 				assert.NoError(t, err)
@@ -679,7 +681,7 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				}
 				// wait until the reconciler sees the object in its cache
 				assert.EventuallyWithT(t, func(collect *assert.CollectT) {
-					actual := &v1alpha1.OpenTelemetryCollector{}
+					actual := &v1beta1.OpenTelemetryCollector{}
 					err = reconciler.Get(testContext, nsn, actual)
 					assert.NoError(collect, err)
 					assert.Equal(collect, updateParam.Spec, actual.Spec)
@@ -696,6 +698,9 @@ func TestOpenTelemetryCollectorReconciler_Reconcile(t *testing.T) {
 				assert.Equal(t, checkGroup.result, got)
 				for _, check := range checkGroup.checks {
 					check(t, updateParam)
+				}
+				if createErr == nil && deletionTimestamp == nil {
+					assertCollectorReadyStatus(t, nsn)
 				}
 			}
 			// Only delete upon a successful creation
@@ -729,17 +734,17 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 			},
 			Config: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"prometheus": map[string]interface{}{
-							"config": map[string]interface{}{
-								"scrape_configs": []interface{}{},
+					Object: map[string]any{
+						"prometheus": map[string]any{
+							"config": map[string]any{
+								"scrape_configs": []any{},
 							},
 						},
 					},
 				},
 				Exporters: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"nop": map[string]interface{}{},
+					Object: map[string]any{
+						"nop": map[string]any{},
 					},
 				},
 				Service: v1beta1.Service{
@@ -776,7 +781,7 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 		{
 			name: "disable default service account",
 			mutateCollector: func(obj *v1beta1.OpenTelemetryCollector) {
-				obj.Spec.OpenTelemetryCommonFields.ServiceAccount = "placeholder"
+				obj.Spec.ServiceAccount = "placeholder"
 			},
 			expectedResourcesDeletedCount: 1,
 		},
@@ -787,8 +792,10 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 	cfg := config.Config{
 		CollectorImage:              "default-collector",
 		TargetAllocatorImage:        "default-ta-allocator",
+		CollectorConfigMapEntry:     "collector.yaml",
 		OpenShiftRoutesAvailability: openshift.RoutesAvailable,
 		PrometheusCRAvailability:    prometheus.Available,
+		EnableInstrumentationCRDs:   true,
 	}
 	reconciler := createTestReconciler(t, testCtx, cfg)
 
@@ -801,7 +808,6 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			namespace, err := createRandomNamespace(k8sClient)
 			require.NoError(t, err)
@@ -826,8 +832,16 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 			req := k8sreconcile.Request{
 				NamespacedName: nsn,
 			}
+
+			// Wait for the reconciler's cache to see the collector
+			require.EventuallyWithT(t, func(collect *assert.CollectT) {
+				actual := &v1beta1.OpenTelemetryCollector{}
+				getErr := reconciler.Get(clientCtx, nsn, actual)
+				assert.NoError(collect, getErr)
+			}, time.Second*10, time.Millisecond*100)
+
 			_, reconcileErr := reconciler.Reconcile(clientCtx, req)
-			assert.NoError(t, reconcileErr)
+			require.NoError(t, reconcileErr)
 
 			assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 				list, listErr := getAllOwnedResources(clientCtx, reconciler, collector, opts...)
@@ -841,7 +855,7 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 			tc.mutateCollector(collector)
 			err = k8sClient.Update(clientCtx, collector)
 			require.NoError(t, err)
-			assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+			require.EventuallyWithT(t, func(collect *assert.CollectT) {
 				actual := &v1beta1.OpenTelemetryCollector{}
 				err = reconciler.Get(clientCtx, nsn, actual)
 				assert.NoError(collect, err)
@@ -849,7 +863,7 @@ func TestOpenTelemetryCollectorReconciler_RemoveDisabled(t *testing.T) {
 			}, time.Second*30, time.Millisecond*100)
 
 			_, reconcileErr = reconciler.Reconcile(clientCtx, req)
-			assert.NoError(t, reconcileErr)
+			require.NoError(t, reconcileErr)
 
 			expectedResourceCount := expectedStartingResourceCount - tc.expectedResourcesDeletedCount
 			assert.EventuallyWithT(t, func(collect *assert.CollectT) {
@@ -877,13 +891,13 @@ func TestOpenTelemetryCollectorReconciler_VersionedConfigMaps(t *testing.T) {
 			Mode:           v1beta1.ModeStatefulSet,
 			Config: v1beta1.Config{
 				Receivers: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"nop": map[string]interface{}{},
+					Object: map[string]any{
+						"nop": map[string]any{},
 					},
 				},
 				Exporters: v1beta1.AnyConfig{
-					Object: map[string]interface{}{
-						"nop": map[string]interface{}{},
+					Object: map[string]any{
+						"nop": map[string]any{},
 					},
 				},
 				Service: v1beta1.Service{
@@ -903,7 +917,9 @@ func TestOpenTelemetryCollectorReconciler_VersionedConfigMaps(t *testing.T) {
 	cfg := config.Config{
 		CollectorImage:              "default-collector",
 		TargetAllocatorImage:        "default-ta-allocator",
+		CollectorConfigMapEntry:     "collector.yaml",
 		OpenShiftRoutesAvailability: openshift.RoutesAvailable,
+		EnableInstrumentationCRDs:   true,
 	}
 	reconciler := createTestReconciler(t, testCtx, cfg)
 
@@ -945,7 +961,7 @@ func TestOpenTelemetryCollectorReconciler_VersionedConfigMaps(t *testing.T) {
 	time.Sleep(time.Second)
 	err = k8sClient.Get(clientCtx, nsn, collector)
 	require.NoError(t, err)
-	collector.Spec.Config.Exporters.Object["debug"] = map[string]interface{}{}
+	collector.Spec.Config.Exporters.Object["debug"] = map[string]any{}
 	err = k8sClient.Update(clientCtx, collector)
 	require.NoError(t, err)
 	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
@@ -971,7 +987,7 @@ func TestOpenTelemetryCollectorReconciler_VersionedConfigMaps(t *testing.T) {
 	time.Sleep(time.Second)
 	err = k8sClient.Get(clientCtx, nsn, collector)
 	require.NoError(t, err)
-	collector.Spec.Config.Exporters.Object["debug/2"] = map[string]interface{}{}
+	collector.Spec.Config.Exporters.Object["debug/2"] = map[string]any{}
 	err = k8sClient.Update(clientCtx, collector)
 	require.NoError(t, err)
 	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
@@ -1089,7 +1105,6 @@ func TestOpAMPBridgeReconciler_Reconcile(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			testContext := context.Background()
 			nsn := types.NamespacedName{Name: tt.args.params.OpAMPBridge.Name, Namespace: tt.args.params.OpAMPBridge.Namespace}
@@ -1100,12 +1115,13 @@ func TestOpAMPBridgeReconciler_Reconcile(t *testing.T) {
 				OperatorOpAMPBridgeConfigMapEntry: "remoteconfiguration.yaml",
 				CollectorConfigMapEntry:           "collector.yaml",
 				TargetAllocatorConfigMapEntry:     "targetallocator.yaml",
+				EnableInstrumentationCRDs:         true,
 			}
 			reconciler := controllers.NewOpAMPBridgeReconciler(controllers.OpAMPBridgeReconcilerParams{
 				Client:   k8sClient,
 				Log:      logger,
 				Scheme:   testScheme,
-				Recorder: record.NewFakeRecorder(20),
+				Recorder: events.NewFakeRecorder(20),
 				Config:   cfg,
 			})
 			assert.True(t, len(tt.want) > 0, "must have at least one group of checks to run")
@@ -1128,7 +1144,6 @@ func TestOpAMPBridgeReconciler_Reconcile(t *testing.T) {
 			}
 			// run the next set of checks
 			for pid, updateParam := range tt.args.updates {
-				updateParam := updateParam
 				existing := v1alpha1.OpAMPBridge{}
 				found, err := populateObjectIfExists(t, &existing, nsn)
 				assert.True(t, found)
@@ -1201,14 +1216,7 @@ func TestRegisterWithManager(t *testing.T) {
 }
 
 func TestOpenTelemetryCollectorReconciler_Finalizer(t *testing.T) {
-	otelcol := &v1alpha1.OpenTelemetryCollector{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "otel-k8sattrs",
-			Namespace: "test-finalizer",
-		},
-		Spec: v1alpha1.OpenTelemetryCollectorSpec{
-			Mode: v1alpha1.ModeDeployment,
-			Config: `
+	configYaml := `
 processors:
   k8sattributes:
 receivers:
@@ -1225,7 +1233,17 @@ service:
       receivers: [otlp]
       processors: [k8sattributes]
       exporters: [debug]
-`,
+`
+	var otelConfig v1beta1.Config
+	require.NoError(t, yaml.Unmarshal([]byte(configYaml), &otelConfig))
+	otelcol := &v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "otel-k8sattrs",
+			Namespace: "test-finalizer",
+		},
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			Mode:   v1beta1.ModeDeployment,
+			Config: otelConfig,
 		},
 	}
 
@@ -1239,8 +1257,7 @@ service:
 	clientErr = k8sClient.Create(context.Background(), otelcol)
 	require.NoError(t, clientErr)
 
-	testCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	testCtx := t.Context()
 
 	cfg := config.Config{
 		CollectorImage:                    "default-collector",
@@ -1248,6 +1265,7 @@ service:
 		CreateRBACPermissions:             autoRBAC.Available,
 		CollectorConfigMapEntry:           "collector.yaml",
 		OperatorOpAMPBridgeConfigMapEntry: "remoteconfiguration.yaml",
+		EnableInstrumentationCRDs:         true,
 	}
 	reconciler := createTestReconciler(t, testCtx, cfg)
 
@@ -1257,7 +1275,7 @@ service:
 	}
 	reconcile, reconcileErr := reconciler.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr)
-	require.False(t, reconcile.Requeue)
+	require.Zero(t, reconcile.RequeueAfter)
 
 	colClusterRole := &rbacv1.ClusterRole{}
 	clientErr = k8sClient.Get(context.Background(), types.NamespacedName{
@@ -1283,7 +1301,7 @@ service:
 
 	reconcile, reconcileErr = reconciler.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr)
-	require.False(t, reconcile.Requeue)
+	require.Zero(t, reconcile.RequeueAfter)
 
 	clientErr = k8sClient.Get(context.Background(), types.NamespacedName{
 		Name: naming.ClusterRole(otelcol.Name, otelcol.Namespace),
@@ -1296,14 +1314,14 @@ service:
 }
 
 func TestUpgrade(t *testing.T) {
-	testCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	testCtx := t.Context()
 
 	cfg := config.Config{
 		CollectorImage:                "default-collector",
 		TargetAllocatorImage:          "default-ta-allocator",
 		CollectorConfigMapEntry:       "collector.yaml",
 		TargetAllocatorConfigMapEntry: "remoteconfiguration.yaml",
+		EnableInstrumentationCRDs:     true,
 	}
 	reconciler := createTestReconcilerWithVersion(
 		t, testCtx,
@@ -1356,7 +1374,7 @@ func TestUpgrade(t *testing.T) {
 			expected: func(t *testing.T, otelcol v1beta1.OpenTelemetryCollector) {
 				assert.Equal(t, upgrade.Latest.String(), otelcol.Status.Version)
 				// The '-component.UseLocalHostAsDefaultHost' feature gate was removed in the 0.110.0 upgrade step
-				assert.Equal(t, "", otelcol.Spec.OpenTelemetryCommonFields.Args["feature-gates"])
+				assert.Equal(t, "", otelcol.Spec.Args["feature-gates"])
 			},
 		},
 		{
@@ -1455,19 +1473,30 @@ func TestUpgrade(t *testing.T) {
 				assert.Equal(collect, tt.input.Status, freshOtelcol.Status)
 			}, time.Second*10, time.Millisecond*10)
 
+			// Wait for the reconciler's cache to see the correct status
+			require.EventuallyWithT(t, func(collect *assert.CollectT) {
+				freshOtelcol := &v1beta1.OpenTelemetryCollector{}
+				getErr := reconciler.Get(testCtx, nsn, freshOtelcol)
+				assert.NoError(collect, getErr)
+				assert.Equal(collect, tt.input.Status, freshOtelcol.Status)
+			}, time.Second*10, time.Millisecond*10)
+
 			// First reconcile
+			var reconcile k8sreconcile.Result
 			req := k8sreconcile.Request{NamespacedName: nsn}
-			reconcile, err := reconciler.Reconcile(testCtx, req)
-			require.NoError(t, err)
-			require.Equal(t, tt.expectRequeue, reconcile.Requeue)
+			require.EventuallyWithT(t, func(collect *assert.CollectT) {
+				reconcile, err = reconciler.Reconcile(testCtx, req)
+				require.NoError(collect, err)
+			}, time.Second*10, time.Millisecond*10)
+			require.Equal(t, tt.expectRequeue, reconcile.RequeueAfter.Nanoseconds() > 0)
 
 			// Second reconcile (if upgrade was run)
-			if reconcile.Requeue {
+			if reconcile.RequeueAfter.Nanoseconds() > 0 {
 				time.Sleep(reconcile.RequeueAfter)
 
 				reconcile, err = reconciler.Reconcile(testCtx, req)
 				require.NoError(t, err)
-				require.False(t, reconcile.Requeue)
+				assert.Zero(t, reconcile.RequeueAfter)
 			}
 
 			// Compare upgraded CR with expected
@@ -1479,11 +1508,165 @@ func TestUpgrade(t *testing.T) {
 	}
 }
 
-func namespacedObjectName(name string, namespace string) types.NamespacedName {
+func namespacedObjectName(name, namespace string) types.NamespacedName {
 	return types.NamespacedName{
 		Namespace: namespace,
 		Name:      name,
 	}
+}
+
+func assertCollectorReadyStatus(t *testing.T, nsn types.NamespacedName) {
+	t.Helper()
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+		actual := &v1beta1.OpenTelemetryCollector{}
+		err := k8sClient.Get(context.Background(), nsn, actual)
+		assert.NoError(collect, err)
+		if actual.GetDeletionTimestamp() != nil {
+			return
+		}
+		assert.Equal(collect, actual.Generation, actual.Status.ObservedGeneration)
+		readyCondition := meta.FindStatusCondition(actual.Status.Conditions, "Ready")
+		if assert.NotNil(collect, readyCondition) {
+			assert.Equal(collect, metav1.ConditionTrue, readyCondition.Status)
+			assert.Equal(collect, actual.Generation, readyCondition.ObservedGeneration)
+		}
+	}, time.Second*10, time.Millisecond*100)
+}
+
+func TestTLSDefaultingAtReconcileTime(t *testing.T) {
+	// This test verifies that when a collector with TLS config is reconciled,
+	// the TLS defaults from OperandTLSProfile are injected into the generated ConfigMap.
+	// This happens at reconciliation time (ConfigMap generation), not via webhook.
+
+	collectorName := sanitizeResourceName(t.Name())
+	collector := &v1beta1.OpenTelemetryCollector{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      collectorName,
+			Namespace: metav1.NamespaceDefault,
+		},
+		Spec: v1beta1.OpenTelemetryCollectorSpec{
+			Mode: v1beta1.ModeDeployment,
+			Config: v1beta1.Config{
+				Receivers: v1beta1.AnyConfig{
+					Object: map[string]any{
+						"otlp": map[string]any{
+							"protocols": map[string]any{
+								"grpc": map[string]any{
+									"endpoint": "0.0.0.0:4317",
+									"tls": map[string]any{
+										"cert_file": "/certs/tls.crt",
+										"key_file":  "/certs/tls.key",
+									},
+								},
+							},
+						},
+					},
+				},
+				Exporters: v1beta1.AnyConfig{
+					Object: map[string]any{
+						"debug": map[string]any{},
+					},
+				},
+				Service: v1beta1.Service{
+					Pipelines: map[string]*v1beta1.Pipeline{
+						"traces": {
+							Receivers: []string{"otlp"},
+							Exporters: []string{"debug"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	testCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// Create a config with OperandTLSProfile set (TLS 1.2 and specific cipher)
+	cfg := config.Config{
+		CollectorImage:          "default-collector",
+		TargetAllocatorImage:    "default-ta-allocator",
+		CollectorConfigMapEntry: "collector.yaml",
+	}
+	cfg.Internal.OperandTLSProfile = components.NewStaticTLSProfile(
+		tls.VersionTLS12,
+		[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+	)
+	reconciler := createTestReconciler(t, testCtx, cfg)
+
+	clientCtx := context.Background()
+	err := k8sClient.Create(clientCtx, collector)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		deleteErr := k8sClient.Delete(clientCtx, collector)
+		assert.NoError(t, deleteErr)
+	})
+
+	nsn := types.NamespacedName{Name: collector.Name, Namespace: collector.Namespace}
+	err = k8sClient.Get(clientCtx, nsn, collector)
+	require.NoError(t, err)
+
+	// Reconcile to generate the ConfigMap
+	req := k8sreconcile.Request{NamespacedName: nsn}
+	_, reconcileErr := reconciler.Reconcile(clientCtx, req)
+	require.NoError(t, reconcileErr)
+
+	// Find and verify the generated ConfigMap
+	opts := []client.ListOption{
+		client.InNamespace(collector.Namespace),
+		client.MatchingLabels(map[string]string{
+			"app.kubernetes.io/managed-by": "opentelemetry-operator",
+			"app.kubernetes.io/instance":   naming.Truncate("%s.%s", 63, nsn.Namespace, nsn.Name),
+		}),
+	}
+
+	var configMap *v1.ConfigMap
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+		configMaps := &v1.ConfigMapList{}
+		listErr := k8sClient.List(clientCtx, configMaps, opts...)
+		assert.NoError(collect, listErr)
+		if len(configMaps.Items) > 0 {
+			configMap = &configMaps.Items[0]
+		}
+		assert.NotNil(collect, configMap, "ConfigMap should be created")
+	}, time.Second*30, time.Millisecond*100)
+
+	require.NotNil(t, configMap, "ConfigMap should be created")
+
+	// Parse the collector config from the ConfigMap
+	collectorYAML, ok := configMap.Data["collector.yaml"]
+	require.True(t, ok, "ConfigMap should contain collector.yaml")
+
+	var configData map[string]any
+	err = yaml.Unmarshal([]byte(collectorYAML), &configData)
+	require.NoError(t, err)
+
+	// Navigate to the TLS config in the OTLP receiver
+	receivers, ok := configData["receivers"].(map[string]any)
+	require.True(t, ok, "receivers should exist")
+
+	otlp, ok := receivers["otlp"].(map[string]any)
+	require.True(t, ok, "otlp receiver should exist")
+
+	protocols, ok := otlp["protocols"].(map[string]any)
+	require.True(t, ok, "protocols should exist")
+
+	grpc, ok := protocols["grpc"].(map[string]any)
+	require.True(t, ok, "grpc protocol should exist")
+
+	tlsConfig, ok := grpc["tls"].(map[string]any)
+	require.True(t, ok, "tls config should exist")
+
+	// Check that min_version was injected (TLS 1.2 = "1.2")
+	minVersion, ok := tlsConfig["min_version"]
+	assert.True(t, ok, "min_version should be set at reconcile time")
+	assert.Equal(t, "1.2", minVersion, "min_version should be 1.2 from TLS profile")
+
+	// Check that cipher_suites was injected
+	cipherSuites, ok := tlsConfig["cipher_suites"]
+	assert.True(t, ok, "cipher_suites should be set at reconcile time")
+	expectedCiphers := []any{"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"}
+	assert.Equal(t, expectedCiphers, cipherSuites, "cipher_suites should match TLS profile")
 }
 
 // getAllResources gets all the resource types owned by the controller.
@@ -1552,7 +1735,7 @@ func createTestReconcilerWithVersion(t *testing.T, ctx context.Context, cfg conf
 		Client:   cacheClient,
 		Log:      logger,
 		Scheme:   testScheme,
-		Recorder: record.NewFakeRecorder(20),
+		Recorder: events.NewFakeRecorder(20),
 		Config:   cfg,
 		Version:  v,
 	})

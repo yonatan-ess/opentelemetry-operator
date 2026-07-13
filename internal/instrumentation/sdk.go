@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -49,176 +49,254 @@ func (i *sdkInjector) inject(ctx context.Context, insts languageInstrumentations
 		return pod
 	}
 	if insts.Java.Instrumentation != nil {
-		otelinst := *insts.Java.Instrumentation
-		var err error
-		i.logger.V(1).Info("injecting Java instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.Java.Containers) == 0 {
-			insts.Java.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.Java.Containers {
-			index := getContainerIndex(container, pod)
-			pod, err = injectJavaagent(otelinst.Spec.Java, pod, index, otelinst.Spec)
-			if err != nil {
-				i.logger.Info("Skipping javaagent injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
-			} else {
-				pod = i.injectCommonEnvVar(otelinst, pod, index)
-				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-				pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, javaInitContainerName)
-			}
-		}
+		pod = i.injectJava(ctx, insts.Java, ns, pod)
 	}
 	if insts.NodeJS.Instrumentation != nil {
-		otelinst := *insts.NodeJS.Instrumentation
-		var err error
-		i.logger.V(1).Info("injecting NodeJS instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.NodeJS.Containers) == 0 {
-			insts.NodeJS.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.NodeJS.Containers {
-			index := getContainerIndex(container, pod)
-			pod, err = injectNodeJSSDK(otelinst.Spec.NodeJS, pod, index, otelinst.Spec)
-			if err != nil {
-				i.logger.Info("Skipping NodeJS SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
-			} else {
-				pod = i.injectCommonEnvVar(otelinst, pod, index)
-				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-				pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, nodejsInitContainerName)
-			}
-		}
+		pod = i.injectNodeJS(ctx, insts.NodeJS, ns, pod)
 	}
 	if insts.Python.Instrumentation != nil {
-		otelinst := *insts.Python.Instrumentation
-		var err error
-		i.logger.V(1).Info("injecting Python instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.Python.Containers) == 0 {
-			insts.Python.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.Python.Containers {
-			index := getContainerIndex(container, pod)
-			pod, err = injectPythonSDK(otelinst.Spec.Python, pod, index, insts.Python.AdditionalAnnotations[annotationPythonPlatform], otelinst.Spec)
-			if err != nil {
-				i.logger.Info("Skipping Python SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
-			} else {
-				pod = i.injectCommonEnvVar(otelinst, pod, index)
-				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-				pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, pythonInitContainerName)
-			}
-		}
+		pod = i.injectPython(ctx, insts.Python, ns, pod)
 	}
 	if insts.DotNet.Instrumentation != nil {
-		otelinst := *insts.DotNet.Instrumentation
-		var err error
-		i.logger.V(1).Info("injecting DotNet instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.DotNet.Containers) == 0 {
-			insts.DotNet.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.DotNet.Containers {
-			index := getContainerIndex(container, pod)
-			pod, err = injectDotNetSDK(otelinst.Spec.DotNet, pod, index, insts.DotNet.AdditionalAnnotations[annotationDotNetRuntime], otelinst.Spec)
-			if err != nil {
-				i.logger.Info("Skipping DotNet SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
-			} else {
-				pod = i.injectCommonEnvVar(otelinst, pod, index)
-				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-				pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, dotnetInitContainerName)
-			}
-		}
+		pod = i.injectDotNet(ctx, insts.DotNet, ns, pod)
 	}
 	if insts.Go.Instrumentation != nil {
-		origPod := pod
-		otelinst := *insts.Go.Instrumentation
-		var err error
-		i.logger.V(1).Info("injecting Go instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.Go.Containers) == 0 {
-			insts.Go.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		// Go instrumentation supports only single container instrumentation.
-		index := getContainerIndex(insts.Go.Containers[0], pod)
-		pod, err = injectGoSDK(otelinst.Spec.Go, pod, cfg, otelinst.Spec)
-		if err != nil {
-			i.logger.Info("Skipping Go SDK injection", "reason", err.Error(), "container", pod.Spec.Containers[index].Name)
-		} else {
-			// Common env vars and config need to be applied to the agent contain.
-			pod = i.injectCommonEnvVar(otelinst, pod, len(pod.Spec.Containers)-1)
-			pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, len(pod.Spec.Containers)-1, index)
-
-			// Ensure that after all the env var coalescing we have a value for OTEL_GO_AUTO_TARGET_EXE
-			idx := getIndexOfEnv(pod.Spec.Containers[len(pod.Spec.Containers)-1].Env, envOtelTargetExe)
-			if idx == -1 {
-				i.logger.Info("Skipping Go SDK injection", "reason", "OTEL_GO_AUTO_TARGET_EXE not set", "container", pod.Spec.Containers[index].Name)
-				pod = origPod
-			}
-		}
+		pod = i.injectGo(ctx, insts.Go, ns, pod, cfg)
 	}
 	if insts.ApacheHttpd.Instrumentation != nil {
-		otelinst := *insts.ApacheHttpd.Instrumentation
-		i.logger.V(1).Info("injecting Apache Httpd instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.ApacheHttpd.Containers) == 0 {
-			insts.ApacheHttpd.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.ApacheHttpd.Containers {
-			index := getContainerIndex(container, pod)
-			// Apache agent is configured via config files rather than env vars.
-			// Therefore, service name, otlp endpoint and other attributes are passed to the agent injection method
-			useLabelsForResourceAttributes := otelinst.Spec.Defaults.UseLabelsForResourceAttributes
-			pod = injectApacheHttpdagent(i.logger, otelinst.Spec.ApacheHttpd, pod, useLabelsForResourceAttributes, index, otelinst.Spec.Endpoint, i.createResourceMap(ctx, otelinst, ns, pod, index), otelinst.Spec)
-			pod = i.injectCommonEnvVar(otelinst, pod, index)
-			pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-			pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, apacheAgentInitContainerName)
-			pod = i.setInitContainerSecurityContext(pod, pod.Spec.Containers[index].SecurityContext, apacheAgentCloneContainerName)
-		}
+		pod = i.injectApacheHttpd(ctx, insts.ApacheHttpd, ns, pod)
 	}
-
 	if insts.Nginx.Instrumentation != nil {
-		otelinst := *insts.Nginx.Instrumentation
-		i.logger.V(1).Info("injecting Nginx instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
-
-		if len(insts.Nginx.Containers) == 0 {
-			insts.Nginx.Containers = []string{pod.Spec.Containers[0].Name}
-		}
-
-		for _, container := range insts.Nginx.Containers {
-			index := getContainerIndex(container, pod)
-			// Nginx agent is configured via config files rather than env vars.
-			// Therefore, service name, otlp endpoint and other attributes are passed to the agent injection method
-			useLabelsForResourceAttributes := otelinst.Spec.Defaults.UseLabelsForResourceAttributes
-			pod = injectNginxSDK(i.logger, otelinst.Spec.Nginx, pod, useLabelsForResourceAttributes, index, otelinst.Spec.Endpoint, i.createResourceMap(ctx, otelinst, ns, pod, index), otelinst.Spec)
-			pod = i.injectCommonEnvVar(otelinst, pod, index)
-			pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
-		}
+		pod = i.injectNginx(ctx, insts.Nginx, ns, pod)
+	}
+	if insts.Sdk.Instrumentation != nil {
+		pod = i.injectSdk(ctx, insts.Sdk, ns, pod)
 	}
 
-	if insts.Sdk.Instrumentation != nil {
-		otelinst := *insts.Sdk.Instrumentation
-		i.logger.V(1).Info("injecting sdk-only instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+	return pod
+}
 
-		if len(insts.Sdk.Containers) == 0 {
-			insts.Sdk.Containers = []string{pod.Spec.Containers[0].Name}
+func (i *sdkInjector) injectJava(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting Java instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	containers := containersToInstrument(&inst, &pod)
+
+	if len(containers) > 0 {
+		for _, container := range containers {
+			if err := injectJavaagentToContainer(otelinst.Spec.Java, container); err != nil {
+				i.logger.Info("Skipping javaagent injection", "reason", err.Error(), "container", container.Name)
+			} else {
+				i.injectCommonEnvVar(otelinst, container)
+				i.injectDefaultJavaEnvVars(container, otelinst.Spec.Java)
+				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+			}
+		}
+		pod = injectJavaagentToPod(otelinst.Spec.Java, pod, containers[0].Name, otelinst.Spec)
+		pod = i.setInitContainerSecurityContext(pod, resolveInitContainerSecurityContext(otelinst.Spec.InitContainerSecurityContext, containers[0].SecurityContext), javaInitContainerName)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectNodeJS(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting NodeJS instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	containers := containersToInstrument(&inst, &pod)
+
+	if len(containers) > 0 {
+		for _, container := range containers {
+			if err := injectNodeJSSDKToContainer(otelinst.Spec.NodeJS, container); err != nil {
+				i.logger.Info("Skipping NodeJS SDK injection", "reason", err.Error(), "container", container.Name)
+			} else {
+				i.injectCommonEnvVar(otelinst, container)
+				i.injectDefaultNodeJSEnvVars(container)
+				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+			}
 		}
 
-		for _, container := range insts.Sdk.Containers {
-			index := getContainerIndex(container, pod)
-			pod = i.injectCommonEnvVar(otelinst, pod, index)
-			pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, index, index)
+		pod = injectNodeJSSDKToPod(otelinst.Spec.NodeJS, pod, containers[0].Name, otelinst.Spec)
+		pod = i.setInitContainerSecurityContext(pod, resolveInitContainerSecurityContext(otelinst.Spec.InitContainerSecurityContext, containers[0].SecurityContext), nodejsInitContainerName)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectPython(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting Python instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	platform := inst.AdditionalAnnotations[annotationPythonPlatform]
+	containers := containersToInstrument(&inst, &pod)
+
+	if len(containers) > 0 {
+		for _, container := range containers {
+			if err := injectPythonSDKToContainer(otelinst.Spec.Python, container, platform); err != nil {
+				i.logger.Info("Skipping Python SDK injection", "reason", err.Error(), "container", container.Name)
+			} else {
+				i.injectCommonEnvVar(otelinst, container)
+				i.injectDefaultPythonEnvVars(container)
+				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+			}
+		}
+
+		pod = injectPythonSDKToPod(otelinst.Spec.Python, pod, containers[0].Name, platform, otelinst.Spec)
+		pod = i.setInitContainerSecurityContext(pod, resolveInitContainerSecurityContext(otelinst.Spec.InitContainerSecurityContext, containers[0].SecurityContext), pythonInitContainerName)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectDotNet(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting DotNet instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	runtime := inst.AdditionalAnnotations[annotationDotNetRuntime]
+	containers := containersToInstrument(&inst, &pod)
+
+	if len(containers) > 0 {
+		for _, container := range containers {
+			if err := injectDotNetSDKToContainer(otelinst.Spec.DotNet, container, runtime); err != nil {
+				i.logger.Info("Skipping DotNet SDK injection", "reason", err.Error(), "container", container.Name)
+			} else {
+				i.injectCommonEnvVar(otelinst, container)
+				pod = i.injectDefaultDotNetEnvVarsWrapper(pod, container, runtime)
+				pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+			}
+		}
+
+		pod = injectDotNetSDKToPod(otelinst.Spec.DotNet, pod, containers[0].Name, otelinst.Spec)
+		pod = i.setInitContainerSecurityContext(pod, resolveInitContainerSecurityContext(otelinst.Spec.InitContainerSecurityContext, containers[0].SecurityContext), dotnetInitContainerName)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectGo(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod, cfg config.Config) corev1.Pod {
+	origPod := pod
+	otelinst := *inst.Instrumentation
+	var err error
+	i.logger.V(1).Info("injecting Go instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	ensureContainer(&inst, pod)
+
+	// Go instrumentation supports only single container instrumentation
+	// and it can't be an initContainer
+	containerName := inst.Containers[0]
+	if isInitContainer(containerName, &pod) {
+		i.logger.Info("Skipping Go SDK injection", "reason", errors.New("is init container"), "container", containerName)
+	} else if pod, err = injectGoSDK(otelinst.Spec.Go, pod, cfg, otelinst.Spec); err != nil {
+		i.logger.Info("Skipping Go SDK injection", "reason", err.Error(), "container", containerName)
+	} else {
+		// Get container references from the modified pod
+		appContainer := getContainerByName(containerName, &pod)
+		goSidecar := &pod.Spec.Containers[len(pod.Spec.Containers)-1]
+		// Common env vars and config need to be applied to the agent container (sidecar).
+		i.injectCommonEnvVar(otelinst, goSidecar)
+		pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, goSidecar, appContainer)
+
+		// Ensure that after all the env var coalescing we have a value for OTEL_GO_AUTO_TARGET_EXE
+		idx := getIndexOfEnv(goSidecar.Env, envOtelTargetExe)
+		if idx == -1 {
+			i.logger.Info("Skipping Go SDK injection", "reason", "OTEL_GO_AUTO_TARGET_EXE not set", "container", containerName)
+			pod = origPod
 		}
 	}
 
 	return pod
 }
 
-func (i *sdkInjector) setInitContainerSecurityContext(pod corev1.Pod, securityContext *corev1.SecurityContext, instrInitContainerName string) corev1.Pod {
+func (i *sdkInjector) injectApacheHttpd(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting Apache Httpd instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	for _, container := range containersToInstrument(&inst, &pod) {
+		if isInitContainer(container.Name, &pod) {
+			i.logger.Info("Skipping Apache Httpd injection", "reason", errors.New("is init container"), "container", container.Name)
+			continue
+		}
+		// Apache agent is configured via config files rather than env vars.
+		// Therefore, service name, otlp endpoint and other attributes are passed to the agent injection method
+		useLabelsForResourceAttributes := otelinst.Spec.Defaults.UseLabelsForResourceAttributes
+		pod = injectApacheHttpdagent(i.logger, otelinst.Spec.ApacheHttpd, pod, useLabelsForResourceAttributes, container, otelinst.Spec.Endpoint, i.createResourceMap(ctx, otelinst, ns, pod, container), otelinst.Spec)
+		i.injectCommonEnvVar(otelinst, container)
+		pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+		apacheSC := resolveInitContainerSecurityContext(otelinst.Spec.InitContainerSecurityContext, container.SecurityContext)
+		pod = i.setInitContainerSecurityContext(pod, apacheSC, apacheAgentInitContainerName)
+		pod = i.setInitContainerSecurityContext(pod, apacheSC, apacheAgentCloneContainerName)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectNginx(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting Nginx instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	for _, container := range containersToInstrument(&inst, &pod) {
+		if isInitContainer(container.Name, &pod) {
+			i.logger.Info("Skipping Nginx injection", "reason", errors.New("is init container"), "container", container.Name)
+			continue
+		}
+		// Nginx agent is configured via config files rather than env vars.
+		// Therefore, service name, otlp endpoint and other attributes are passed to the agent injection method
+		useLabelsForResourceAttributes := otelinst.Spec.Defaults.UseLabelsForResourceAttributes
+		pod = injectNginxSDK(i.logger, otelinst.Spec.Nginx, pod, useLabelsForResourceAttributes, container, otelinst.Spec.Endpoint, i.createResourceMap(ctx, otelinst, ns, pod, container), otelinst.Spec)
+		i.injectCommonEnvVar(otelinst, container)
+		pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+	}
+
+	return pod
+}
+
+func (i *sdkInjector) injectSdk(ctx context.Context, inst instrumentationWithContainers, ns corev1.Namespace, pod corev1.Pod) corev1.Pod {
+	otelinst := *inst.Instrumentation
+	i.logger.V(1).Info("injecting sdk-only instrumentation into pod", "otelinst-namespace", otelinst.Namespace, "otelinst-name", otelinst.Name)
+
+	for _, container := range containersToInstrument(&inst, &pod) {
+		i.injectCommonEnvVar(otelinst, container)
+		pod = i.injectCommonSDKConfig(ctx, otelinst, ns, pod, container, container)
+	}
+
+	return pod
+}
+
+func ensureContainer(inst *instrumentationWithContainers, pod corev1.Pod) {
+	if len(inst.Containers) == 0 {
+		inst.Containers = []string{pod.Spec.Containers[0].Name}
+	}
+}
+
+// containersToInstrument returns pointers to containers to instrument, with init containers first
+// (sorted by their position in pod.Spec.InitContainers), followed by regular containers.
+func containersToInstrument(inst *instrumentationWithContainers, pod *corev1.Pod) []*corev1.Container {
+	ensureContainer(inst, *pod)
+	// Separate init containers and regular containers, keeping init containers in their original order.
+	// Init containers must be processed first so instrumentation init containers are inserted
+	// before all target init containers that need them.
+	var initContainers []*corev1.Container
+	var regularContainers []*corev1.Container
+	for _, name := range inst.Containers {
+		if c := findContainerByName(name, pod); c != nil {
+			if isInitContainer(name, pod) {
+				initContainers = append(initContainers, c)
+			} else {
+				regularContainers = append(regularContainers, c)
+			}
+		}
+	}
+	// Sort init containers by their position in pod.Spec.InitContainers
+	slices.SortFunc(initContainers, func(a, b *corev1.Container) int {
+		aIdx := slices.IndexFunc(pod.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == a.Name })
+		bIdx := slices.IndexFunc(pod.Spec.InitContainers, func(c corev1.Container) bool { return c.Name == b.Name })
+		return aIdx - bIdx
+	})
+	// Return init containers first, then regular containers
+	return append(initContainers, regularContainers...)
+}
+
+func (*sdkInjector) setInitContainerSecurityContext(pod corev1.Pod, securityContext *corev1.SecurityContext, instrInitContainerName string) corev1.Pod {
 	for i, initContainer := range pod.Spec.InitContainers {
 		if initContainer.Name == instrInitContainerName {
 			pod.Spec.InitContainers[i].SecurityContext = securityContext
@@ -228,22 +306,65 @@ func (i *sdkInjector) setInitContainerSecurityContext(pod corev1.Pod, securityCo
 	return pod
 }
 
-func getContainerIndex(containerName string, pod corev1.Pod) int {
-	// We search for specific container to inject variables and if no one is found
-	// We fall back to first container
-	var index = 0
-	for idx, ctnair := range pod.Spec.Containers {
-		if ctnair.Name == containerName {
-			index = idx
-		}
+// resolveInitContainerSecurityContext returns the security context to apply to
+// an auto-instrumentation init container. An explicit value on the
+// Instrumentation spec's language section wins; otherwise, the init container
+// inherits from the application container being instrumented (existing
+// behavior, which lets it mount volumes the app container can write).
+func resolveInitContainerSecurityContext(specSecurityContext, containerSecurityContext *corev1.SecurityContext) *corev1.SecurityContext {
+	if specSecurityContext != nil {
+		return specSecurityContext
 	}
-
-	return index
+	return containerSecurityContext
 }
 
-func (i *sdkInjector) injectCommonEnvVar(otelinst v1alpha1.Instrumentation, pod corev1.Pod, index int) corev1.Pod {
-	container := &pod.Spec.Containers[index]
+func isInitContainer(name string, pod *corev1.Pod) bool {
+	return slices.ContainsFunc(pod.Spec.InitContainers, func(c corev1.Container) bool {
+		return c.Name == name
+	})
+}
 
+func findContainerByName(name string, pod *corev1.Pod) *corev1.Container {
+	if i := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == name
+	}); i >= 0 {
+		return &pod.Spec.Containers[i]
+	}
+	if i := slices.IndexFunc(pod.Spec.InitContainers, func(c corev1.Container) bool {
+		return c.Name == name
+	}); i >= 0 {
+		return &pod.Spec.InitContainers[i]
+	}
+	return nil
+}
+
+// insertInitContainer inserts an instrumentation init container into the pod.
+// If the target container is an init container, the instrumentation init container is inserted
+// before the target so agent files are available when the target runs.
+// If the target container is a regular container, the instrumentation init container is appended.
+func insertInitContainer(pod *corev1.Pod, toInsert corev1.Container, targetContainerName string) []corev1.Container {
+	if isInitContainer(targetContainerName, pod) {
+		for i, c := range pod.Spec.InitContainers {
+			if c.Name == targetContainerName {
+				return slices.Insert(pod.Spec.InitContainers, i, toInsert)
+			}
+		}
+	}
+	// Regular container or target not found - append at end
+	return append(pod.Spec.InitContainers, toInsert)
+}
+
+func getContainerByName(containerName string, pod *corev1.Pod) *corev1.Container {
+	// We search for specific container to inject variables and if no one is found
+	// We fall back to first container
+	container := findContainerByName(containerName, pod)
+	if container == nil {
+		return &pod.Spec.Containers[0]
+	}
+	return container
+}
+
+func (*sdkInjector) injectCommonEnvVar(otelinst v1alpha1.Instrumentation, container *corev1.Container) {
 	idx := getIndexOfEnv(container.Env, constants.EnvPodIP)
 	if idx == -1 {
 		container.Env = append([]corev1.EnvVar{{
@@ -274,6 +395,27 @@ func (i *sdkInjector) injectCommonEnvVar(otelinst v1alpha1.Instrumentation, pod 
 			container.Env = append(container.Env, env)
 		}
 	}
+}
+
+// injectDefaultJavaEnvVars injects default environment variables for Java.
+func (*sdkInjector) injectDefaultJavaEnvVars(container *corev1.Container, javaSpec v1alpha1.Java) {
+	container.Env = appendOrReplace(container.Env, getDefaultJavaEnvVars(container, javaSpec)...)
+}
+
+// injectDefaultNodeJSEnvVars injects default environment variables for Node.js.
+func (*sdkInjector) injectDefaultNodeJSEnvVars(container *corev1.Container) {
+	envVars := getDefaultNodeJSEnvVars(container)
+	container.Env = appendOrReplace(container.Env, envVars...)
+}
+
+// injectDefaultPythonEnvVars injects default environment variables for Python.
+func (*sdkInjector) injectDefaultPythonEnvVars(container *corev1.Container) {
+	container.Env = appendIfNotSet(container.Env, getDefaultPythonEnvVars()...)
+}
+
+// injectDefaultDotNetEnvVarsWrapper injects default environment variables for .NET.
+func (*sdkInjector) injectDefaultDotNetEnvVarsWrapper(pod corev1.Pod, container *corev1.Container, runtime string) corev1.Pod {
+	injectDefaultDotNetEnvVars(container, runtime)
 	return pod
 }
 
@@ -284,15 +426,14 @@ func (i *sdkInjector) injectCommonEnvVar(otelinst v1alpha1.Instrumentation, pod 
 // and appIndex should be the same value.  This is true for dotnet, java, nodejs, and python instrumentations.
 // Go requires the agent to be a different container in the pod, so the agentIndex should represent this new sidecar
 // and appIndex should represent the application being instrumented.
-func (i *sdkInjector) injectCommonSDKConfig(ctx context.Context, otelinst v1alpha1.Instrumentation, ns corev1.Namespace, pod corev1.Pod, agentIndex int, appIndex int) corev1.Pod {
-	container := &pod.Spec.Containers[agentIndex]
+func (i *sdkInjector) injectCommonSDKConfig(ctx context.Context, otelinst v1alpha1.Instrumentation, ns corev1.Namespace, pod corev1.Pod, container, appContainer *corev1.Container) corev1.Pod {
 	useLabelsForResourceAttributes := otelinst.Spec.Defaults.UseLabelsForResourceAttributes
-	resourceMap := i.createResourceMap(ctx, otelinst, ns, pod, appIndex)
+	resourceMap := i.createResourceMap(ctx, otelinst, ns, pod, appContainer)
 	idx := getIndexOfEnv(container.Env, constants.EnvOTELServiceName)
 	if idx == -1 {
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  constants.EnvOTELServiceName,
-			Value: chooseServiceName(pod, useLabelsForResourceAttributes, resourceMap, appIndex),
+			Value: chooseServiceName(pod, useLabelsForResourceAttributes, resourceMap, appContainer),
 		})
 	}
 	configureExporter(otelinst.Spec.Exporter, &pod, container)
@@ -325,7 +466,7 @@ func (i *sdkInjector) injectCommonSDKConfig(ctx context.Context, otelinst v1alph
 
 	idx = getIndexOfEnv(container.Env, constants.EnvOTELResourceAttrs)
 	if idx == -1 || !strings.Contains(container.Env[idx].Value, string(semconv.ServiceVersionKey)) {
-		vsn := chooseServiceVersion(pod, useLabelsForResourceAttributes, appIndex)
+		vsn := chooseServiceVersion(pod, useLabelsForResourceAttributes, appContainer)
 		if vsn != "" {
 			resourceMap[string(semconv.ServiceVersionKey)] = vsn
 		}
@@ -368,17 +509,17 @@ func (i *sdkInjector) injectCommonSDKConfig(ctx context.Context, otelinst v1alph
 
 	idx = getIndexOfEnv(container.Env, constants.EnvOTELTracesSampler)
 	// configure sampler only if it is configured in the CR
-	if idx == -1 && otelinst.Spec.Sampler.Type != "" {
+	if idx == -1 && otelinst.Spec.Type != "" {
 		idxSamplerArg := getIndexOfEnv(container.Env, constants.EnvOTELTracesSamplerArg)
 		if idxSamplerArg == -1 {
 			container.Env = append(container.Env, corev1.EnvVar{
 				Name:  constants.EnvOTELTracesSampler,
-				Value: string(otelinst.Spec.Sampler.Type),
+				Value: string(otelinst.Spec.Type),
 			})
-			if otelinst.Spec.Sampler.Argument != "" {
+			if otelinst.Spec.Argument != "" {
 				container.Env = append(container.Env, corev1.EnvVar{
 					Name:  constants.EnvOTELTracesSamplerArg,
-					Value: otelinst.Spec.Sampler.Argument,
+					Value: otelinst.Spec.Argument,
 				})
 			}
 		}
@@ -398,7 +539,7 @@ func (i *sdkInjector) injectCommonSDKConfig(ctx context.Context, otelinst v1alph
 
 // chooseServiceName returns the service name to be used in the instrumentation.
 // See https://github.com/open-telemetry/semantic-conventions/blob/main/docs/non-normative/k8s-attributes.md#how-servicename-should-be-calculated
-func chooseServiceName(pod corev1.Pod, useLabelsForResourceAttributes bool, resources map[string]string, index int) string {
+func chooseServiceName(pod corev1.Pod, useLabelsForResourceAttributes bool, resources map[string]string, container *corev1.Container) string {
 	if name := chooseLabelOrAnnotation(pod, useLabelsForResourceAttributes, semconv.ServiceNameKey, constants.LabelAppName); name != "" {
 		return name
 	}
@@ -423,7 +564,7 @@ func chooseServiceName(pod corev1.Pod, useLabelsForResourceAttributes bool, reso
 	if name := resources[string(semconv.K8SPodNameKey)]; name != "" {
 		return name
 	}
-	return pod.Spec.Containers[index].Name
+	return container.Name
 }
 
 // chooseLabelOrAnnotation returns the value of the label or annotation with the given key.
@@ -446,13 +587,13 @@ func chooseLabelOrAnnotation(pod corev1.Pod, useLabelsForResourceAttributes bool
 
 // chooseServiceVersion returns the service version to be used in the instrumentation.
 // See https://github.com/open-telemetry/semantic-conventions/blob/main/docs/non-normative/k8s-attributes.md#how-serviceversion-should-be-calculated
-func chooseServiceVersion(pod corev1.Pod, useLabelsForResourceAttributes bool, index int) string {
+func chooseServiceVersion(pod corev1.Pod, useLabelsForResourceAttributes bool, container *corev1.Container) string {
 	v := chooseLabelOrAnnotation(pod, useLabelsForResourceAttributes, semconv.ServiceVersionKey, constants.LabelAppVersion)
 	if v != "" {
 		return v
 	}
 	var err error
-	v, err = parseServiceVersionFromImage(pod.Spec.Containers[index].Image)
+	v, err = parseServiceVersionFromImage(container.Image)
 	if err != nil {
 		return ""
 	}
@@ -525,13 +666,13 @@ func createServiceInstanceId(pod corev1.Pod, namespaceName, podName, containerNa
 
 // createResourceMap creates resource attribute map.
 // User defined attributes (in explicitly set env var) have higher precedence.
-func (i *sdkInjector) createResourceMap(ctx context.Context, otelinst v1alpha1.Instrumentation, ns corev1.Namespace, pod corev1.Pod, index int) map[string]string {
+func (i *sdkInjector) createResourceMap(ctx context.Context, otelinst v1alpha1.Instrumentation, ns corev1.Namespace, pod corev1.Pod, container *corev1.Container) map[string]string {
 	// get existing resources env var and parse it into a map
 	existingRes := map[string]bool{}
-	existingResourceEnvIdx := getIndexOfEnv(pod.Spec.Containers[index].Env, constants.EnvOTELResourceAttrs)
+	existingResourceEnvIdx := getIndexOfEnv(container.Env, constants.EnvOTELResourceAttrs)
 	if existingResourceEnvIdx > -1 {
-		existingResArr := strings.Split(pod.Spec.Containers[index].Env[existingResourceEnvIdx].Value, ",")
-		for _, kv := range existingResArr {
+		existingResArr := strings.SplitSeq(container.Env[existingResourceEnvIdx].Value, ",")
+		for kv := range existingResArr {
 			keyValueArr := strings.Split(strings.TrimSpace(kv), "=")
 			if len(keyValueArr) != 2 {
 				continue
@@ -554,13 +695,13 @@ func (i *sdkInjector) createResourceMap(ctx context.Context, otelinst v1alpha1.I
 	// k8s resources have a higher precedence than CRD entries
 	k8sResources := map[attribute.Key]string{}
 	k8sResources[semconv.K8SNamespaceNameKey] = ns.Name
-	k8sResources[semconv.K8SContainerNameKey] = pod.Spec.Containers[index].Name
+	k8sResources[semconv.K8SContainerNameKey] = container.Name
 	// Some fields might be empty - node name, pod name
 	// The pod name might be empty if the pod is created form deployment template
 	k8sResources[semconv.K8SPodNameKey] = pod.Name
 	k8sResources[semconv.K8SPodUIDKey] = string(pod.UID)
 	k8sResources[semconv.K8SNodeNameKey] = pod.Spec.NodeName
-	k8sResources[semconv.ServiceInstanceIDKey] = createServiceInstanceId(pod, ns.Name, fmt.Sprintf("$(%s)", constants.EnvPodName), pod.Spec.Containers[index].Name)
+	k8sResources[semconv.ServiceInstanceIDKey] = createServiceInstanceId(pod, ns.Name, fmt.Sprintf("$(%s)", constants.EnvPodName), container.Name)
 	i.addParentResourceLabels(ctx, otelinst.Spec.Resource.AddK8sUIDAttributes, ns, pod.ObjectMeta, k8sResources)
 
 	for k, v := range k8sResources {
@@ -571,8 +712,8 @@ func (i *sdkInjector) createResourceMap(ctx context.Context, otelinst v1alpha1.I
 
 	// attributes and labels from the pod have the highest precedence (except for values set in environment variables)
 	for k, v := range pod.GetAnnotations() {
-		if strings.HasPrefix(k, constants.ResourceAttributeAnnotationPrefix) {
-			key := strings.TrimPrefix(k, constants.ResourceAttributeAnnotationPrefix)
+		if after, ok := strings.CutPrefix(k, constants.ResourceAttributeAnnotationPrefix); ok {
+			key := after
 			if !existingRes[key] && key != string(semconv.ServiceNameKey) {
 				res[key] = v
 			}
@@ -599,16 +740,12 @@ func (i *sdkInjector) addParentResourceLabels(ctx context.Context, uid bool, ns 
 			nsn := types.NamespacedName{Namespace: ns.Name, Name: owner.Name}
 			backOff := wait.Backoff{Duration: 10 * time.Millisecond, Factor: 1.5, Jitter: 0.1, Steps: 20, Cap: 2 * time.Second}
 
-			checkError := func(err error) bool {
-				return apierrors.IsNotFound(err)
-			}
-
 			getReplicaSet := func() error {
 				return i.client.Get(ctx, nsn, &rs)
 			}
 
 			// use a retry loop to get the Deployment. A single call to client.get fails occasionally
-			err := retry.OnError(backOff, checkError, getReplicaSet)
+			err := retry.OnError(backOff, apierrors.IsNotFound, getReplicaSet)
 			if err != nil {
 				i.logger.Error(err, "failed to get replicaset", "replicaset", nsn.Name, "namespace", nsn.Namespace)
 			}
@@ -639,16 +776,12 @@ func (i *sdkInjector) addParentResourceLabels(ctx context.Context, uid bool, ns 
 			nsn := types.NamespacedName{Namespace: ns.Name, Name: owner.Name}
 			backOff := wait.Backoff{Duration: 10 * time.Millisecond, Factor: 1.5, Jitter: 0.1, Steps: 20, Cap: 2 * time.Second}
 
-			checkError := func(err error) bool {
-				return apierrors.IsNotFound(err)
-			}
-
 			getJob := func() error {
 				return i.client.Get(ctx, nsn, &j)
 			}
 
 			// use a retry loop to get the Job. A single call to client.get fails occasionally
-			err := retry.OnError(backOff, checkError, getJob)
+			err := retry.OnError(backOff, apierrors.IsNotFound, getJob)
 			if err != nil {
 				i.logger.Error(err, "failed to get job", "job", nsn.Name, "namespace", nsn.Namespace)
 			}
@@ -667,9 +800,9 @@ func resourceMapToStr(res map[string]string) string {
 	for k := range res {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
-	var str = ""
+	str := ""
 	for _, k := range keys {
 		if str != "" {
 			str += ","
@@ -698,6 +831,23 @@ func appendIfNotSet(envs []corev1.EnvVar, newEnvVars ...corev1.EnvVar) []corev1.
 		if _, ok := keys[envVar.Name]; !ok {
 			envs = append(envs, envVar)
 			keys[envVar.Name] = struct{}{}
+		}
+	}
+	return envs
+}
+
+// appendOrReplace appends new environment variables or replaces existing ones.
+// This is used for instrumentation where we need to modify existing environment variables
+// (e.g., adding javaagent to existing JAVA_TOOL_OPTIONS).
+func appendOrReplace(envs []corev1.EnvVar, newEnvVars ...corev1.EnvVar) []corev1.EnvVar {
+	for _, newEnvVar := range newEnvVars {
+		idx := getIndexOfEnv(envs, newEnvVar.Name)
+		if idx == -1 {
+			// Environment variable doesn't exist, append it
+			envs = append(envs, newEnvVar)
+		} else {
+			// Environment variable exists, replace it
+			envs[idx] = newEnvVar
 		}
 	}
 	return envs

@@ -4,32 +4,26 @@ metadata:
   name: operator-metrics
 spec:
   steps:
-    - name: Assert operator metrics.
+    - name: Enable ServiceMonitor and assert operator metrics
       try:
-        - command:
-            entrypoint: kubectl
-            args:
-            - get
-            - pods
-            - -A
-            - -l app.kubernetes.io/name=opentelemetry-operator
-            - -o 
-            - jsonpath={.items[0].metadata.namespace}
-            outputs:
-            - name: otelnamespace
-              value: ($stdout)
+        # Enable ServiceMonitor creation for operator metrics
+        - script:
+            timeout: 2m
+            content: |
+              #!/bin/bash
+              kubectl set env deployment/opentelemetry-operator-controller-manager -n opentelemetry-operator-system CREATE_SM_OPERATOR_METRICS=true
+              kubectl rollout status deployment/opentelemetry-operator-controller-manager -n opentelemetry-operator-system --timeout=120s
+        # Assert operator is running
         - assert:
             file: assert-operator.yaml
+        # Get service name for metrics access
         - command:
-            env:
-              - name: otelnamespace
-                value: ($otelnamespace)
             entrypoint: kubectl
             args:
               - get
               - service
               - -n
-              - $otelnamespace
+              - opentelemetry-operator-system
               - -l
               - app.kubernetes.io/name=opentelemetry-operator
               - -o
@@ -37,6 +31,7 @@ spec:
             outputs:
               - name: serviceName
                 value: ($stdout)
+        # Fetch metrics from operator
         - script:
             env:
               - name: serviceName
@@ -49,6 +44,7 @@ spec:
                 value: (x_metrics_decode($stdout))
             check:
               ($error == null): true
+        # Assert metrics are present
         - assert:
             resource:
               (length($metrics[?as_string(metric."__name__") == 'certwatcher_read_certificate_errors_total']) >= `0`): true
@@ -117,3 +113,6 @@ spec:
               (length($metrics[?as_string(metric."__name__") == 'workqueue_work_duration_seconds_bucket']) >= `0`): true
               (length($metrics[?as_string(metric."__name__") == 'workqueue_work_duration_seconds_sum']) >= `0`): true
               (length($metrics[?as_string(metric."__name__") == 'workqueue_work_duration_seconds_count']) >= `0`): true
+        # Assert ServiceMonitor is created
+        - assert:
+            file: assert-servicemonitor.yaml

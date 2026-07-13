@@ -10,6 +10,8 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/open-telemetry/opentelemetry-operator/apis/v1beta1"
 )
 
 // ManagementStateType defines the type for CR management states.
@@ -104,10 +106,12 @@ type OpenTelemetryCollectorSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 	// MinReplicas sets a lower bound to the autoscaling feature.  Set this if you are using autoscaling. It must be at least 1
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Spec.Autoscaler.MinReplicas" instead.
 	MinReplicas *int32 `json:"minReplicas,omitempty"`
 	// MaxReplicas sets an upper bound to the autoscaling feature. If MaxReplicas is set autoscaling is enabled.
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Spec.Autoscaler.MaxReplicas" instead.
 	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 	// Autoscaler specifies the pod autoscaling configuration to use
@@ -389,6 +393,12 @@ type OpenTelemetryTargetAllocatorPrometheusCR struct {
 	// +kubebuilder:default:="30s"
 	// +kubebuilder:validation:Format:=duration
 	ScrapeInterval *metav1.Duration `json:"scrapeInterval,omitempty"`
+	// ScrapeClasses to be referenced by PodMonitors and ServiceMonitors to include common configuration.
+	// If specified, expects an array of ScrapeClass objects as specified by https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ScrapeClass.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:pruning:PreserveUnknownFields
+	ScrapeClasses []v1beta1.AnyConfig `json:"scrapeClasses,omitempty"`
 	// PodMonitors to be selected for target discovery.
 	// This is a map of {key,value} pairs. Each {key,value} in the map is going to exactly match a label in a
 	// PodMonitor's meta labels. The requirements are ANDed.
@@ -401,6 +411,16 @@ type OpenTelemetryTargetAllocatorPrometheusCR struct {
 	// Empty or nil map matches all service monitors.
 	// +optional
 	ServiceMonitorSelector map[string]string `json:"serviceMonitorSelector,omitempty"`
+	// DenyFSAccessThroughSMs causes the Target Allocator to drop ServiceMonitor and
+	// PodMonitor endpoints that reference arbitrary files on the file system. When
+	// enabled, endpoints with bearerTokenFile, tlsConfig.caFile, tlsConfig.certFile,
+	// or tlsConfig.keyFile are dropped from the produced scrape configuration while
+	// the remaining endpoints are kept. This prevents tenants from stealing the
+	// Collector's service account token via ServiceMonitor bearerTokenFile
+	// references. This is the equivalent of ArbitraryFSAccessThroughSMs.Deny from
+	// the Prometheus Operator.
+	// +optional
+	DenyFSAccessThroughSMs bool `json:"denyFSAccessThroughSMs,omitempty"`
 }
 
 // ScaleSubresourceStatus defines the observed state of the OpenTelemetryCollector's
@@ -440,11 +460,13 @@ type OpenTelemetryCollectorStatus struct {
 	// Messages about actions performed by the operator on this resource.
 	// +optional
 	// +listType=atomic
+	//
 	// Deprecated: use Kubernetes events instead.
 	Messages []string `json:"messages,omitempty"`
 
 	// Replicas is currently not being set and might be removed in the next version.
 	// +optional
+	//
 	// Deprecated: use "OpenTelemetryCollector.Status.Scale.Replicas" instead.
 	Replicas int32 `json:"replicas,omitempty"`
 }
@@ -600,8 +622,4 @@ type ConfigMapsSpec struct {
 	// Configmap defines name and path where the configMaps should be mounted.
 	Name      string `json:"name"`
 	MountPath string `json:"mountpath"`
-}
-
-func init() {
-	SchemeBuilder.Register(&OpenTelemetryCollector{}, &OpenTelemetryCollectorList{})
 }

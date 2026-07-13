@@ -57,7 +57,7 @@ Instrumentation is the spec for OpenTelemetry instrumentation.
         </td>
         <td>false</td>
       </tr><tr>
-        <td><b>status</b></td>
+        <td><b><a href="#instrumentationstatus">status</a></b></td>
         <td>object</td>
         <td>
           InstrumentationStatus defines status of the instrumentation.<br/>
@@ -137,6 +137,19 @@ Failure to set this value causes instrumentation injection to abort, leaving the
           ImagePullPolicy
 One of Always, Never, IfNotPresent.
 Defaults to Always if :latest tag is specified, or IfNotPresent otherwise.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontext">initContainerSecurityContext</a></b></td>
+        <td>object</td>
+        <td>
+          InitContainerSecurityContext applied to the auto-instrumentation init
+containers created for Java, NodeJS, Python, DotNet, Apache HTTPD and
+Nginx. When unset, init containers inherit the security context of the
+first application container being instrumented (existing behavior). The
+Go auto-instrumentation sidecar is intentionally excluded — its security
+requirements (eBPF) differ from the init-container languages and are
+configured via `spec.go.securityContext`.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -224,7 +237,7 @@ Attributes are documented at https://github.com/open-telemetry/opentelemetry-cpp
         <td>string</td>
         <td>
           Location of Apache HTTPD server configuration.
-Needed only if different from default "/usr/local/apache2/conf"<br/>
+Needed only if different from default "/usr/local/apache2/conf".<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -271,6 +284,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -298,7 +312,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -356,6 +371,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecapachehttpdattrsindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -453,6 +476,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.apacheHttpd.attrs[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecapachehttpdattrsindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -568,7 +651,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -626,6 +710,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecapachehttpdenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -723,6 +815,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.apacheHttpd.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecapachehttpdenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -841,7 +993,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -1015,7 +1167,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -1043,15 +1195,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -1196,7 +1346,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -1455,6 +1605,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -1482,7 +1633,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -1540,6 +1692,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecdotnetenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -1637,6 +1797,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.dotnet.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecdotnetenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -1755,7 +1975,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -1929,7 +2149,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -1957,15 +2177,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2110,7 +2328,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -2305,7 +2523,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -2363,6 +2582,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2460,6 +2687,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -2698,6 +2985,16 @@ If the former var had been defined, then the other vars would be ignored.<br/>
         </td>
         <td>false</td>
       </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontext">securityContext</a></b></td>
+        <td>object</td>
+        <td>
+          SecurityContext applied to the Go auto-instrumentation sidecar. If unset,
+the sidecar runs with the hardcoded defaults required for eBPF tracing
+(Privileged: true, RunAsUser: 0). Override with care — the sidecar needs
+access to /sys/kernel/debug to attach uprobes.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
         <td><b><a href="#instrumentationspecgovolumeclaimtemplate">volumeClaimTemplate</a></b></td>
         <td>object</td>
         <td>
@@ -2711,6 +3008,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -2738,7 +3036,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -2796,6 +3095,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgoenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -2893,6 +3200,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecgoenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -3011,7 +3378,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -3071,6 +3438,393 @@ inside a container.<br/>
           Request is the name chosen for a request in the referenced claim.
 If empty, everything from the claim is made available, otherwise
 only the result of this request.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext
+<sup><sup>[↩ Parent](#instrumentationspecgo)</sup></sup>
+
+
+
+SecurityContext applied to the Go auto-instrumentation sidecar. If unset,
+the sidecar runs with the hardcoded defaults required for eBPF tracing
+(Privileged: true, RunAsUser: 0). Override with care — the sidecar needs
+access to /sys/kernel/debug to attach uprobes.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>allowPrivilegeEscalation</b></td>
+        <td>boolean</td>
+        <td>
+          AllowPrivilegeEscalation controls whether a process can gain more
+privileges than its parent process. This bool directly controls if
+the no_new_privs flag will be set on the container process.
+AllowPrivilegeEscalation is true always when the container is:
+1) run as Privileged
+2) has CAP_SYS_ADMIN
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontextapparmorprofile">appArmorProfile</a></b></td>
+        <td>object</td>
+        <td>
+          appArmorProfile is the AppArmor options to use by this container. If set, this profile
+overrides the pod's appArmorProfile.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontextcapabilities">capabilities</a></b></td>
+        <td>object</td>
+        <td>
+          The capabilities to add/drop when running containers.
+Defaults to the default set of capabilities granted by the container runtime.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>privileged</b></td>
+        <td>boolean</td>
+        <td>
+          Run container in privileged mode.
+Processes in privileged containers are essentially equivalent to root on the host.
+Defaults to false.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>procMount</b></td>
+        <td>string</td>
+        <td>
+          procMount denotes the type of proc mount to use for the containers.
+The default value is Default which uses the container runtime defaults for
+readonly paths and masked paths.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>readOnlyRootFilesystem</b></td>
+        <td>boolean</td>
+        <td>
+          Whether this container has a read-only root filesystem.
+Default is false.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsGroup</b></td>
+        <td>integer</td>
+        <td>
+          The GID to run the entrypoint of the container process.
+Uses runtime default if unset.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsNonRoot</b></td>
+        <td>boolean</td>
+        <td>
+          Indicates that the container must run as a non-root user.
+If true, the Kubelet will validate the image at runtime to ensure that it
+does not run as UID 0 (root) and fail to start the container if it does.
+If unset or false, no such validation will be performed.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsUser</b></td>
+        <td>integer</td>
+        <td>
+          The UID to run the entrypoint of the container process.
+Defaults to user specified in image metadata if unspecified.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontextselinuxoptions">seLinuxOptions</a></b></td>
+        <td>object</td>
+        <td>
+          The SELinux context to be applied to the container.
+If unspecified, the container runtime will allocate a random SELinux context for each
+container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontextseccompprofile">seccompProfile</a></b></td>
+        <td>object</td>
+        <td>
+          The seccomp options to use by this container. If seccomp options are
+provided at both the pod & container level, the container options
+override the pod options.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecgosecuritycontextwindowsoptions">windowsOptions</a></b></td>
+        <td>object</td>
+        <td>
+          The Windows specific settings applied to all containers.
+If unspecified, the options from the PodSecurityContext will be used.
+If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is linux.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext.appArmorProfile
+<sup><sup>[↩ Parent](#instrumentationspecgosecuritycontext)</sup></sup>
+
+
+
+appArmorProfile is the AppArmor options to use by this container. If set, this profile
+overrides the pod's appArmorProfile.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type indicates which kind of AppArmor profile will be applied.
+Valid options are:
+  Localhost - a profile pre-loaded on the node.
+  RuntimeDefault - the container runtime's default profile.
+  Unconfined - no AppArmor enforcement.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>localhostProfile</b></td>
+        <td>string</td>
+        <td>
+          localhostProfile indicates a profile loaded on the node that should be used.
+The profile must be preconfigured on the node to work.
+Must match the loaded name of the profile.
+Must be set if and only if type is "Localhost".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext.capabilities
+<sup><sup>[↩ Parent](#instrumentationspecgosecuritycontext)</sup></sup>
+
+
+
+The capabilities to add/drop when running containers.
+Defaults to the default set of capabilities granted by the container runtime.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>add</b></td>
+        <td>[]string</td>
+        <td>
+          Added capabilities<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>drop</b></td>
+        <td>[]string</td>
+        <td>
+          Removed capabilities<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext.seLinuxOptions
+<sup><sup>[↩ Parent](#instrumentationspecgosecuritycontext)</sup></sup>
+
+
+
+The SELinux context to be applied to the container.
+If unspecified, the container runtime will allocate a random SELinux context for each
+container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>level</b></td>
+        <td>string</td>
+        <td>
+          Level is SELinux level label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>role</b></td>
+        <td>string</td>
+        <td>
+          Role is a SELinux role label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          Type is a SELinux type label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>user</b></td>
+        <td>string</td>
+        <td>
+          User is a SELinux user label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext.seccompProfile
+<sup><sup>[↩ Parent](#instrumentationspecgosecuritycontext)</sup></sup>
+
+
+
+The seccomp options to use by this container. If seccomp options are
+provided at both the pod & container level, the container options
+override the pod options.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type indicates which kind of seccomp profile will be applied.
+Valid options are:
+
+Localhost - a profile defined in a file on the node should be used.
+RuntimeDefault - the container runtime default profile should be used.
+Unconfined - no profile should be applied.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>localhostProfile</b></td>
+        <td>string</td>
+        <td>
+          localhostProfile indicates a profile defined in a file on the node should be used.
+The profile must be preconfigured on the node to work.
+Must be a descending path, relative to the kubelet's configured seccomp profile location.
+Must be set if type is "Localhost". Must NOT be set for any other type.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.go.securityContext.windowsOptions
+<sup><sup>[↩ Parent](#instrumentationspecgosecuritycontext)</sup></sup>
+
+
+
+The Windows specific settings applied to all containers.
+If unspecified, the options from the PodSecurityContext will be used.
+If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is linux.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>gmsaCredentialSpec</b></td>
+        <td>string</td>
+        <td>
+          GMSACredentialSpec is where the GMSA admission webhook
+(https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+GMSA credential spec named by the GMSACredentialSpecName field.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>gmsaCredentialSpecName</b></td>
+        <td>string</td>
+        <td>
+          GMSACredentialSpecName is the name of the GMSA credential spec to use.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>hostProcess</b></td>
+        <td>boolean</td>
+        <td>
+          HostProcess determines if a container should be run as a 'Host Process' container.
+All of a Pod's containers must have the same effective HostProcess value
+(it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+In addition, if HostProcess is true then HostNetwork must also be set to true.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsUserName</b></td>
+        <td>string</td>
+        <td>
+          The UserName in Windows to run the entrypoint of the container process.
+Defaults to the user specified in image metadata if unspecified.
+May also be set in PodSecurityContext. If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -3185,7 +3939,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -3213,15 +3967,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3366,7 +4118,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -3541,6 +4293,396 @@ validation.
 </table>
 
 
+### Instrumentation.spec.initContainerSecurityContext
+<sup><sup>[↩ Parent](#instrumentationspec)</sup></sup>
+
+
+
+InitContainerSecurityContext applied to the auto-instrumentation init
+containers created for Java, NodeJS, Python, DotNet, Apache HTTPD and
+Nginx. When unset, init containers inherit the security context of the
+first application container being instrumented (existing behavior). The
+Go auto-instrumentation sidecar is intentionally excluded — its security
+requirements (eBPF) differ from the init-container languages and are
+configured via `spec.go.securityContext`.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>allowPrivilegeEscalation</b></td>
+        <td>boolean</td>
+        <td>
+          AllowPrivilegeEscalation controls whether a process can gain more
+privileges than its parent process. This bool directly controls if
+the no_new_privs flag will be set on the container process.
+AllowPrivilegeEscalation is true always when the container is:
+1) run as Privileged
+2) has CAP_SYS_ADMIN
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontextapparmorprofile">appArmorProfile</a></b></td>
+        <td>object</td>
+        <td>
+          appArmorProfile is the AppArmor options to use by this container. If set, this profile
+overrides the pod's appArmorProfile.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontextcapabilities">capabilities</a></b></td>
+        <td>object</td>
+        <td>
+          The capabilities to add/drop when running containers.
+Defaults to the default set of capabilities granted by the container runtime.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>privileged</b></td>
+        <td>boolean</td>
+        <td>
+          Run container in privileged mode.
+Processes in privileged containers are essentially equivalent to root on the host.
+Defaults to false.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>procMount</b></td>
+        <td>string</td>
+        <td>
+          procMount denotes the type of proc mount to use for the containers.
+The default value is Default which uses the container runtime defaults for
+readonly paths and masked paths.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>readOnlyRootFilesystem</b></td>
+        <td>boolean</td>
+        <td>
+          Whether this container has a read-only root filesystem.
+Default is false.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsGroup</b></td>
+        <td>integer</td>
+        <td>
+          The GID to run the entrypoint of the container process.
+Uses runtime default if unset.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsNonRoot</b></td>
+        <td>boolean</td>
+        <td>
+          Indicates that the container must run as a non-root user.
+If true, the Kubelet will validate the image at runtime to ensure that it
+does not run as UID 0 (root) and fail to start the container if it does.
+If unset or false, no such validation will be performed.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsUser</b></td>
+        <td>integer</td>
+        <td>
+          The UID to run the entrypoint of the container process.
+Defaults to user specified in image metadata if unspecified.
+May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+          <br/>
+            <i>Format</i>: int64<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontextselinuxoptions">seLinuxOptions</a></b></td>
+        <td>object</td>
+        <td>
+          The SELinux context to be applied to the container.
+If unspecified, the container runtime will allocate a random SELinux context for each
+container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontextseccompprofile">seccompProfile</a></b></td>
+        <td>object</td>
+        <td>
+          The seccomp options to use by this container. If seccomp options are
+provided at both the pod & container level, the container options
+override the pod options.
+Note that this field cannot be set when spec.os.name is windows.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecinitcontainersecuritycontextwindowsoptions">windowsOptions</a></b></td>
+        <td>object</td>
+        <td>
+          The Windows specific settings applied to all containers.
+If unspecified, the options from the PodSecurityContext will be used.
+If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is linux.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.initContainerSecurityContext.appArmorProfile
+<sup><sup>[↩ Parent](#instrumentationspecinitcontainersecuritycontext)</sup></sup>
+
+
+
+appArmorProfile is the AppArmor options to use by this container. If set, this profile
+overrides the pod's appArmorProfile.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type indicates which kind of AppArmor profile will be applied.
+Valid options are:
+  Localhost - a profile pre-loaded on the node.
+  RuntimeDefault - the container runtime's default profile.
+  Unconfined - no AppArmor enforcement.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>localhostProfile</b></td>
+        <td>string</td>
+        <td>
+          localhostProfile indicates a profile loaded on the node that should be used.
+The profile must be preconfigured on the node to work.
+Must match the loaded name of the profile.
+Must be set if and only if type is "Localhost".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.initContainerSecurityContext.capabilities
+<sup><sup>[↩ Parent](#instrumentationspecinitcontainersecuritycontext)</sup></sup>
+
+
+
+The capabilities to add/drop when running containers.
+Defaults to the default set of capabilities granted by the container runtime.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>add</b></td>
+        <td>[]string</td>
+        <td>
+          Added capabilities<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>drop</b></td>
+        <td>[]string</td>
+        <td>
+          Removed capabilities<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.initContainerSecurityContext.seLinuxOptions
+<sup><sup>[↩ Parent](#instrumentationspecinitcontainersecuritycontext)</sup></sup>
+
+
+
+The SELinux context to be applied to the container.
+If unspecified, the container runtime will allocate a random SELinux context for each
+container.  May also be set in PodSecurityContext.  If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>level</b></td>
+        <td>string</td>
+        <td>
+          Level is SELinux level label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>role</b></td>
+        <td>string</td>
+        <td>
+          Role is a SELinux role label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          Type is a SELinux type label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>user</b></td>
+        <td>string</td>
+        <td>
+          User is a SELinux user label that applies to the container.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.initContainerSecurityContext.seccompProfile
+<sup><sup>[↩ Parent](#instrumentationspecinitcontainersecuritycontext)</sup></sup>
+
+
+
+The seccomp options to use by this container. If seccomp options are
+provided at both the pod & container level, the container options
+override the pod options.
+Note that this field cannot be set when spec.os.name is windows.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>type</b></td>
+        <td>string</td>
+        <td>
+          type indicates which kind of seccomp profile will be applied.
+Valid options are:
+
+Localhost - a profile defined in a file on the node should be used.
+RuntimeDefault - the container runtime default profile should be used.
+Unconfined - no profile should be applied.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>localhostProfile</b></td>
+        <td>string</td>
+        <td>
+          localhostProfile indicates a profile defined in a file on the node should be used.
+The profile must be preconfigured on the node to work.
+Must be a descending path, relative to the kubelet's configured seccomp profile location.
+Must be set if type is "Localhost". Must NOT be set for any other type.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.initContainerSecurityContext.windowsOptions
+<sup><sup>[↩ Parent](#instrumentationspecinitcontainersecuritycontext)</sup></sup>
+
+
+
+The Windows specific settings applied to all containers.
+If unspecified, the options from the PodSecurityContext will be used.
+If set in both SecurityContext and PodSecurityContext, the value specified in SecurityContext takes precedence.
+Note that this field cannot be set when spec.os.name is linux.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>gmsaCredentialSpec</b></td>
+        <td>string</td>
+        <td>
+          GMSACredentialSpec is where the GMSA admission webhook
+(https://github.com/kubernetes-sigs/windows-gmsa) inlines the contents of the
+GMSA credential spec named by the GMSACredentialSpecName field.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>gmsaCredentialSpecName</b></td>
+        <td>string</td>
+        <td>
+          GMSACredentialSpecName is the name of the GMSA credential spec to use.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>hostProcess</b></td>
+        <td>boolean</td>
+        <td>
+          HostProcess determines if a container should be run as a 'Host Process' container.
+All of a Pod's containers must have the same effective HostProcess value
+(it is not allowed to have a mix of HostProcess containers and non-HostProcess containers).
+In addition, if HostProcess is true then HostNetwork must also be set to true.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b>runAsUserName</b></td>
+        <td>string</td>
+        <td>
+          The UserName in Windows to run the entrypoint of the container process.
+Defaults to the user specified in image metadata if unspecified.
+May also be set in PodSecurityContext. If set in both SecurityContext and
+PodSecurityContext, the value specified in SecurityContext takes precedence.<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
 ### Instrumentation.spec.java
 <sup><sup>[↩ Parent](#instrumentationspec)</sup></sup>
 
@@ -3602,6 +4744,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -3629,7 +4772,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -3687,6 +4831,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecjavaenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -3784,6 +4936,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.java.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecjavaenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -3936,7 +5148,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -4110,7 +5322,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -4138,15 +5350,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -4291,7 +5501,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -4496,7 +5706,7 @@ Attributes are documented at https://github.com/open-telemetry/opentelemetry-cpp
         <td>string</td>
         <td>
           Location of Nginx configuration file.
-Needed only if different from default "/etx/nginx/nginx.conf"<br/>
+Needed only if different from default "/etx/nginx/nginx.conf".<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -4536,6 +5746,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -4563,7 +5774,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -4621,6 +5833,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecnginxattrsindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -4718,6 +5938,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.nginx.attrs[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecnginxattrsindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -4833,7 +6113,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -4891,6 +6172,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecnginxenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -4988,6 +6277,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.nginx.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecnginxenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -5106,7 +6455,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -5280,7 +6629,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -5308,15 +6657,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -5461,7 +6808,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -5689,6 +7036,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -5716,7 +7064,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -5774,6 +7123,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecnodejsenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -5871,6 +7228,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.nodejs.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecnodejsenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -5989,7 +7406,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -6163,7 +7580,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -6191,15 +7608,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -6344,7 +7759,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -6572,6 +7987,7 @@ If omitted, an emptyDir is used with size limit VolumeSizeLimit<br/>
         <td>
           VolumeSizeLimit defines size limit for volume used for auto-instrumentation.
 The default size is 200Mi.
+
 Deprecated: use spec.<lang>.volume.size instead. This field will be inactive in a future release.<br/>
         </td>
         <td>false</td>
@@ -6599,7 +8015,8 @@ EnvVar represents an environment variable present in a Container.
         <td><b>name</b></td>
         <td>string</td>
         <td>
-          Name of the environment variable. Must be a C_IDENTIFIER.<br/>
+          Name of the environment variable.
+May consist of any printable ASCII characters except '='.<br/>
         </td>
         <td>true</td>
       </tr><tr>
@@ -6657,6 +8074,14 @@ Source for the environment variable's value. Cannot be used if value is not empt
         <td>
           Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
 spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.<br/>
+        </td>
+        <td>false</td>
+      </tr><tr>
+        <td><b><a href="#instrumentationspecpythonenvindexvaluefromfilekeyref">fileKeyRef</a></b></td>
+        <td>object</td>
+        <td>
+          FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -6754,6 +8179,66 @@ spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podI
         <td>string</td>
         <td>
           Version of the schema the FieldPath is written in terms of, defaults to "v1".<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.spec.python.env[index].valueFrom.fileKeyRef
+<sup><sup>[↩ Parent](#instrumentationspecpythonenvindexvaluefrom)</sup></sup>
+
+
+
+FileKeyRef selects a key of the env file.
+Requires the EnvFiles feature gate to be enabled.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>key</b></td>
+        <td>string</td>
+        <td>
+          The key within the env file. An invalid key will prevent the pod from starting.
+The keys defined within a source may consist of any printable ASCII characters except '='.
+During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>path</b></td>
+        <td>string</td>
+        <td>
+          The path within the volume from which to select the file.
+Must be relative and may not contain the '..' path or start with '..'.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>volumeName</b></td>
+        <td>string</td>
+        <td>
+          The name of the volume mount containing the env file.<br/>
+        </td>
+        <td>true</td>
+      </tr><tr>
+        <td><b>optional</b></td>
+        <td>boolean</td>
+        <td>
+          Specify whether the file or its key must be defined. If the file or key
+does not exist, then the env var is not published.
+If optional is set to true and the specified key does not exist,
+the environment variable will not be set in the Pod's containers.
+
+If optional is set to false and the specified key does not exist,
+an error will be returned during Pod creation.<br/>
+          <br/>
+            <i>Default</i>: false<br/>
         </td>
         <td>false</td>
       </tr></tbody>
@@ -6872,7 +8357,7 @@ Resources describes the compute resource requirements.
           Claims lists the names of resources, defined in spec.resourceClaims,
 that are used by this container.
 
-This is an alpha field and requires enabling the
+This field depends on the
 DynamicResourceAllocation feature gate.
 
 This field is immutable. It can only be set for containers.<br/>
@@ -7046,7 +8531,7 @@ There are three important differences between dataSource and dataSourceRef:
         <td>object</td>
         <td>
           resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources<br/>
@@ -7074,15 +8559,13 @@ More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#class-
           volumeAttributesClassName may be used to set the VolumeAttributesClass used by this claim.
 If specified, the CSI driver will create or update the volume with the attributes defined
 in the corresponding VolumeAttributesClass. This has a different purpose than storageClassName,
-it can be changed after the claim is created. An empty string value means that no VolumeAttributesClass
-will be applied to the claim but it's not allowed to reset this field to empty string once it is set.
-If unspecified and the PersistentVolumeClaim is unbound, the default VolumeAttributesClass
-will be set by the persistentvolume controller if it exists.
+it can be changed after the claim is created. An empty string or nil value indicates that no
+VolumeAttributesClass will be applied to the claim. If the claim enters an Infeasible error state,
+this field can be reset to its previous value (including nil) to cancel the modification.
 If the resource referred to by volumeAttributesClass does not exist, this PersistentVolumeClaim will be
 set to a Pending state, as reflected by the modifyVolumeStatus field, until such as a resource
 exists.
-More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/
-(Beta) Using this field requires the VolumeAttributesClass feature gate to be enabled (off by default).<br/>
+More info: https://kubernetes.io/docs/concepts/storage/volume-attributes-classes/<br/>
         </td>
         <td>false</td>
       </tr><tr>
@@ -7227,7 +8710,7 @@ Note that when a namespace is specified, a gateway.networking.k8s.io/ReferenceGr
 
 
 resources represents the minimum resources the volume should have.
-If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+Users are allowed to specify resource requirements
 that are lower than previous value but must still be higher than capacity recorded in the
 status field of the claim.
 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -7472,6 +8955,36 @@ The value will be set in the OTEL_TRACES_SAMPLER env var.
 The value can be for instance parentbased_always_on, parentbased_always_off, parentbased_traceidratio...<br/>
           <br/>
             <i>Enum</i>: always_on, always_off, traceidratio, parentbased_always_on, parentbased_always_off, parentbased_traceidratio, jaeger_remote, xray<br/>
+        </td>
+        <td>false</td>
+      </tr></tbody>
+</table>
+
+
+### Instrumentation.status
+<sup><sup>[↩ Parent](#instrumentation)</sup></sup>
+
+
+
+InstrumentationStatus defines status of the instrumentation.
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Required</th>
+        </tr>
+    </thead>
+    <tbody><tr>
+        <td><b>upgradeBlockedVersions</b></td>
+        <td>map[string]string</td>
+        <td>
+          UpgradeBlockedVersions contains instrumentation language images whose
+versions could not be automatically upgraded, mapped to a message
+explaining why. The operator will not auto-upgrade these images until
+the user manually changes them to a supported version.<br/>
         </td>
         <td>false</td>
       </tr></tbody>

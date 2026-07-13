@@ -3,17 +3,30 @@
 
 package watcher
 
+// Tests in this file use testing/synctest to make async behavior deterministic.
+//
+// Tests that call Watch() use time.Sleep(watchSyncDuration) before synctest.Wait()
+// to let the informer cache sync complete. This is necessary because Watch()
+// calls WaitForNamedCacheSync for each informer sequentially, and each sync poll
+// involves mutex operations inside the k8s informer machinery. Mutexes are not
+// "durably blocking" in synctest, so synctest.Wait() can return before the
+// informers finish syncing, causing the 15s WaitForNamedCacheSync timeout to
+// fire. Advancing the fake clock by watchSyncDuration gives the ~6 informers
+// enough 100ms poll ticks (client-go's syncedPollPeriod) to each observe that
+// their cache has synced.
+
 import (
 	"context"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	promv1alpha1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1alpha1"
 	"github.com/prometheus-operator/prometheus-operator/pkg/assets"
-	fakemonitoringclient "github.com/prometheus-operator/prometheus-operator/pkg/client/versioned/fake"
 	"github.com/prometheus-operator/prometheus-operator/pkg/informers"
 	"github.com/prometheus-operator/prometheus-operator/pkg/operator"
 	"github.com/prometheus-operator/prometheus-operator/pkg/prometheus"
@@ -28,14 +41,69 @@ import (
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 	"k8s.io/client-go/tools/cache"
 	fcache "k8s.io/client-go/tools/cache/testing"
-	"k8s.io/utils/ptr"
 
 	allocatorconfig "github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/config"
 )
+
+// watchSyncDuration is the fake-clock time we advance after starting Watch() to
+// let all informer caches sync. Watch() syncs ~6 informers sequentially, each
+// requiring at least one 100ms poll tick, so 1s gives comfortable headroom.
+const watchSyncDuration = time.Second
+
+// fakeInformLister wraps a SharedIndexInformer to satisfy the informers.InformLister interface.
+type fakeInformLister struct {
+	informer cache.SharedIndexInformer
+	gr       schema.GroupResource
+}
+
+func (f *fakeInformLister) Informer() cache.SharedIndexInformer { return f.informer }
+func (f *fakeInformLister) Lister() cache.GenericLister {
+	return cache.NewGenericLister(f.informer.GetIndexer(), f.gr)
+}
+
+// fakeFactoriesForNamespaces implements informers.FactoriesForNamespaces using FakeControllerSource.
+type fakeFactoriesForNamespaces struct {
+	sources    map[schema.GroupVersionResource]*fcache.FakeControllerSource
+	exemplars  map[schema.GroupVersionResource]runtime.Object
+	namespaces sets.Set[string]
+}
+
+func (f *fakeFactoriesForNamespaces) Namespaces() sets.Set[string] { return f.namespaces }
+
+func (f *fakeFactoriesForNamespaces) ForResource(_ string, resource schema.GroupVersionResource) (informers.InformLister, error) {
+	source, ok := f.sources[resource]
+	if !ok {
+		source = fcache.NewFakeControllerSource()
+		f.sources[resource] = source
+	}
+	exemplar := f.exemplars[resource]
+	inf := cache.NewSharedIndexInformer(source, exemplar, 1*time.Second,
+		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	return &fakeInformLister{
+		informer: inf,
+		gr:       resource.GroupResource(),
+	}, nil
+}
+
+// testWatcher bundles a PrometheusCRWatcher with fake sources for use in tests.
+// Tests access only the fields they need.
+type testWatcher struct {
+	*PrometheusCRWatcher
+	NamespaceSource      *fcache.FakeControllerSource
+	ServiceMonitorSource *fcache.FakeControllerSource
+	PodMonitorSource     *fcache.FakeControllerSource
+	ProbeSource          *fcache.FakeControllerSource
+	ScrapeConfigSource   *fcache.FakeControllerSource
+	MetadataClient       *metadatafake.FakeMetadataClient
+}
 
 func TestLoadConfig(t *testing.T) {
 	namespace := "test"
@@ -44,6 +112,7 @@ func TestLoadConfig(t *testing.T) {
 		name            string
 		serviceMonitors []*monitoringv1.ServiceMonitor
 		podMonitors     []*monitoringv1.PodMonitor
+		scrapeClasses   []*monitoringv1.ScrapeClass
 		scrapeConfigs   []*promv1alpha1.ScrapeConfig
 		probes          []*monitoringv1.Probe
 		want            *promconfig.Config
@@ -94,7 +163,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/test/simple/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -111,12 +180,18 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 					{
 						JobName:         "podMonitor/test/simple/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -133,8 +208,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -152,18 +233,24 @@ func TestLoadConfig(t *testing.T) {
 						Endpoints: []monitoringv1.Endpoint{
 							{
 								Port: portName,
-								BasicAuth: &monitoringv1.BasicAuth{
-									Username: v1.SecretKeySelector{
-										LocalObjectReference: v1.LocalObjectReference{
-											Name: "basic-auth",
+								HTTPConfigWithProxyAndTLSFiles: monitoringv1.HTTPConfigWithProxyAndTLSFiles{
+									HTTPConfigWithTLSFiles: monitoringv1.HTTPConfigWithTLSFiles{
+										HTTPConfigWithoutTLS: monitoringv1.HTTPConfigWithoutTLS{
+											BasicAuth: &monitoringv1.BasicAuth{
+												Username: v1.SecretKeySelector{
+													LocalObjectReference: v1.LocalObjectReference{
+														Name: "basic-auth",
+													},
+													Key: "username",
+												},
+												Password: v1.SecretKeySelector{
+													LocalObjectReference: v1.LocalObjectReference{
+														Name: "basic-auth",
+													},
+													Key: "password",
+												},
+											},
 										},
-										Key: "username",
-									},
-									Password: v1.SecretKeySelector{
-										LocalObjectReference: v1.LocalObjectReference{
-											Name: "basic-auth",
-										},
-										Key: "password",
 									},
 								},
 							},
@@ -187,7 +274,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/test/auth/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -212,7 +299,13 @@ func TestLoadConfig(t *testing.T) {
 								Password: "password",
 							},
 						},
-						EnableCompression: true,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -230,13 +323,19 @@ func TestLoadConfig(t *testing.T) {
 						PodMetricsEndpoints: []monitoringv1.PodMetricsEndpoint{
 							{
 								Port: &portName,
-								Authorization: &monitoringv1.SafeAuthorization{
-									Type: "Bearer",
-									Credentials: &v1.SecretKeySelector{
-										LocalObjectReference: v1.LocalObjectReference{
-											Name: "bearer",
+								HTTPConfigWithProxy: monitoringv1.HTTPConfigWithProxy{
+									HTTPConfig: monitoringv1.HTTPConfig{
+										HTTPConfigWithoutTLS: monitoringv1.HTTPConfigWithoutTLS{
+											Authorization: &monitoringv1.SafeAuthorization{
+												Type: "Bearer",
+												Credentials: &v1.SecretKeySelector{
+													LocalObjectReference: v1.LocalObjectReference{
+														Name: "bearer",
+													},
+													Key: "token",
+												},
+											},
 										},
-										Key: "token",
 									},
 								},
 							},
@@ -255,7 +354,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "podMonitor/test/bearer/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -280,7 +379,13 @@ func TestLoadConfig(t *testing.T) {
 								Credentials: "bearer-token",
 							},
 						},
-						EnableCompression: true,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -332,7 +437,7 @@ func TestLoadConfig(t *testing.T) {
 									{
 										Action:      "keep",
 										Regex:       ".*(",
-										Replacement: ptr.To("invalid"),
+										Replacement: new("invalid"),
 										TargetLabel: "city",
 									},
 								},
@@ -351,7 +456,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/test/valid-sm/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -368,12 +473,18 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 					{
 						JobName:         "podMonitor/test/valid-pm/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -390,8 +501,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -427,7 +544,7 @@ func TestLoadConfig(t *testing.T) {
 									{
 										Action:      "keep",
 										Regex:       ".*(",
-										Replacement: ptr.To("invalid"),
+										Replacement: new("invalid"),
 										TargetLabel: "city",
 									},
 								},
@@ -462,7 +579,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/test/valid-sm/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -479,12 +596,18 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 					{
 						JobName:         "podMonitor/test/valid-pm/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -501,8 +624,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -555,7 +684,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/test/sm-1/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -572,8 +701,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -626,7 +761,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "podMonitor/test/pm-1/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -643,8 +778,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -687,7 +828,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "scrapeConfig/test/scrapeconfig-test-1",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -707,8 +848,14 @@ func TestLoadConfig(t *testing.T) {
 								},
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -751,7 +898,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "probe/test/probe-test-1",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -773,8 +920,14 @@ func TestLoadConfig(t *testing.T) {
 								},
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -826,7 +979,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "serviceMonitor/labellednamespace/sm-1/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -843,8 +996,14 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -896,7 +1055,7 @@ func TestLoadConfig(t *testing.T) {
 				ScrapeConfigs: []*promconfig.ScrapeConfig{
 					{
 						JobName:         "podMonitor/labellednamespace/pm-1/0",
-						ScrapeInterval:  model.Duration(30 * time.Second),
+						ScrapeInterval:  model.Duration(60 * time.Second),
 						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 						ScrapeTimeout:   model.Duration(10 * time.Second),
 						HonorTimestamps: true,
@@ -913,8 +1072,82 @@ func TestLoadConfig(t *testing.T) {
 								HTTPClientConfig: config.DefaultHTTPClientConfig,
 							},
 						},
-						HTTPClientConfig:  config.DefaultHTTPClientConfig,
-						EnableCompression: true,
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
+					},
+				},
+			},
+		},
+		{
+			name: "pod monitor with referenced scrape class",
+			podMonitors: []*monitoringv1.PodMonitor{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "simple",
+						Namespace: namespace,
+					},
+					Spec: monitoringv1.PodMonitorSpec{
+						JobLabel:        "test",
+						ScrapeClassName: new("attach-node-metadata"),
+						PodMetricsEndpoints: []monitoringv1.PodMetricsEndpoint{
+							{
+								Port: &portName,
+							},
+						},
+					},
+				},
+			},
+			cfg: allocatorconfig.Config{
+				PrometheusCR: allocatorconfig.PrometheusCRConfig{
+					PodMonitorSelector: &metav1.LabelSelector{},
+					ScrapeClasses: []monitoringv1.ScrapeClass{
+						{
+							Name: "attach-node-metadata",
+							AttachMetadata: &monitoringv1.AttachMetadata{
+								Node: new(true),
+							},
+						},
+					},
+				},
+			},
+			want: &promconfig.Config{
+				ScrapeConfigs: []*promconfig.ScrapeConfig{
+					{
+						JobName:         "podMonitor/test/simple/0",
+						ScrapeInterval:  model.Duration(60 * time.Second),
+						ScrapeProtocols: promconfig.DefaultScrapeProtocols,
+						ScrapeTimeout:   model.Duration(10 * time.Second),
+						HonorTimestamps: true,
+						HonorLabels:     false,
+						Scheme:          "http",
+						MetricsPath:     "/metrics",
+						ServiceDiscoveryConfigs: []discovery.Config{
+							&kubeDiscovery.SDConfig{
+								Role: "pod",
+								NamespaceDiscovery: kubeDiscovery.NamespaceDiscovery{
+									Names:               []string{namespace},
+									IncludeOwnNamespace: false,
+								},
+								HTTPClientConfig: config.DefaultHTTPClientConfig,
+								AttachMetadata: kubeDiscovery.AttachMetadataConfig{
+									Node: true, // Added by scrape-class!
+								},
+							},
+						},
+						HTTPClientConfig:               config.DefaultHTTPClientConfig,
+						EnableCompression:              true,
+						AlwaysScrapeClassicHistograms:  new(false),
+						ConvertClassicHistogramsToNHCB: new(false),
+						MetricNameValidationScheme:     model.UTF8Validation,
+						MetricNameEscapingScheme:       model.AllowUTF8,
+						ScrapeNativeHistograms:         new(false),
+						ExtraScrapeMetrics:             new(false),
 					},
 				},
 			},
@@ -922,37 +1155,45 @@ func TestLoadConfig(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w, _ := getTestPrometheusCRWatcher(t, namespace, tt.serviceMonitors, tt.podMonitors, tt.probes, tt.scrapeConfigs, tt.cfg)
-
-			// Start namespace informers in order to populate cache.
-			go w.nsInformer.Run(w.stopChannel)
-			for !w.nsInformer.HasSynced() {
-				time.Sleep(50 * time.Millisecond)
-			}
-
-			for _, informer := range w.informers {
-				// Start informers in order to populate cache.
-				informer.Start(w.stopChannel)
-			}
-
-			// Wait for informers to sync.
-			for _, informer := range w.informers {
-				for !informer.HasSynced() {
-					time.Sleep(50 * time.Millisecond)
+			synctest.Test(t, func(t *testing.T) {
+				tw := newTestWatcher(t, tt.cfg)
+				for _, sm := range tt.serviceMonitors {
+					tw.ServiceMonitorSource.Add(sm)
 				}
-			}
+				for _, pm := range tt.podMonitors {
+					tw.PodMonitorSource.Add(pm)
+				}
+				for _, prb := range tt.probes {
+					tw.ProbeSource.Add(prb)
+				}
+				for _, sc := range tt.scrapeConfigs {
+					tw.ScrapeConfigSource.Add(sc)
+				}
 
-			got, err := w.LoadConfig(context.Background())
-			assert.NoError(t, err)
+				// Start namespace informers in order to populate cache.
+				go tw.nsInformer.Run(tw.stopChannel)
+				synctest.Wait()
 
-			sanitizeScrapeConfigsForTest(got.ScrapeConfigs)
-			assert.Equal(t, tt.want.ScrapeConfigs, got.ScrapeConfigs)
+				for _, informer := range tw.informers {
+					// Start informers in order to populate cache.
+					informer.Start(tw.stopChannel)
+				}
+				synctest.Wait()
+
+				got, err := tw.LoadConfig(context.Background())
+				assert.NoError(t, err)
+
+				sanitizeScrapeConfigsForTest(got.ScrapeConfigs)
+				assert.Equal(t, tt.want.ScrapeConfigs, got.ScrapeConfigs)
+
+				close(tw.stopChannel)
+				synctest.Wait()
+			})
 		})
 	}
 }
 
 func TestNamespaceLabelUpdate(t *testing.T) {
-	var err error
 	namespace := "test"
 	portName := "web"
 	podMonitors := []*monitoringv1.PodMonitor{
@@ -1002,7 +1243,7 @@ func TestNamespaceLabelUpdate(t *testing.T) {
 		ScrapeConfigs: []*promconfig.ScrapeConfig{
 			{
 				JobName:         "podMonitor/labellednamespace/pm-1/0",
-				ScrapeInterval:  model.Duration(30 * time.Second),
+				ScrapeInterval:  model.Duration(60 * time.Second),
 				ScrapeProtocols: promconfig.DefaultScrapeProtocols,
 				ScrapeTimeout:   model.Duration(10 * time.Second),
 				HonorTimestamps: true,
@@ -1019,8 +1260,14 @@ func TestNamespaceLabelUpdate(t *testing.T) {
 						HTTPClientConfig: config.DefaultHTTPClientConfig,
 					},
 				},
-				HTTPClientConfig:  config.DefaultHTTPClientConfig,
-				EnableCompression: true,
+				HTTPClientConfig:               config.DefaultHTTPClientConfig,
+				EnableCompression:              true,
+				AlwaysScrapeClassicHistograms:  new(false),
+				ConvertClassicHistogramsToNHCB: new(false),
+				MetricNameValidationScheme:     model.UTF8Validation,
+				MetricNameEscapingScheme:       model.AllowUTF8,
+				ScrapeNativeHistograms:         new(false),
+				ExtraScrapeMetrics:             new(false),
 			},
 		},
 	}
@@ -1029,51 +1276,205 @@ func TestNamespaceLabelUpdate(t *testing.T) {
 		ScrapeConfigs: []*promconfig.ScrapeConfig{},
 	}
 
-	w, source := getTestPrometheusCRWatcher(t, namespace, nil, podMonitors, nil, nil, cfg)
-	events := make(chan Event, 1)
-	eventInterval := 5 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		tw := newTestWatcher(t, cfg)
+		for _, pm := range podMonitors {
+			tw.PodMonitorSource.Add(pm)
+		}
+		events := make(chan Event, 1)
+		eventInterval := 5 * time.Millisecond
 
-	defer w.Close()
-	w.eventInterval = eventInterval
+		defer tw.Close()
+		tw.eventInterval = eventInterval
 
-	go func() {
-		watchErr := w.Watch(events, make(chan error))
-		require.NoError(t, watchErr)
-	}()
+		go func() {
+			watchErr := tw.Watch(events, make(chan error))
+			require.NoError(t, watchErr)
+		}()
+		// Advance time past the informer sync polling period to let Watch complete setup.
+		time.Sleep(watchSyncDuration)
+		synctest.Wait()
 
-	if success := cache.WaitForNamedCacheSync("namespace", w.stopChannel, w.nsInformer.HasSynced); !success {
-		require.True(t, success)
-	}
-
-	for _, informer := range w.informers {
-		success := cache.WaitForCacheSync(w.stopChannel, informer.HasSynced)
-		require.True(t, success)
-	}
-
-	got, err := w.LoadConfig(context.Background())
-	assert.NoError(t, err)
-
-	sanitizeScrapeConfigsForTest(got.ScrapeConfigs)
-	assert.Equal(t, want_before.ScrapeConfigs, got.ScrapeConfigs)
-
-	source.Modify(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name: "labellednamespace",
-		Labels: map[string]string{
-			"label2": "label2",
-		},
-	}})
-
-	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
-		got, err = w.LoadConfig(context.Background())
-		assert.NoError(collect, err)
+		got, err := tw.LoadConfig(context.Background())
+		assert.NoError(t, err)
 
 		sanitizeScrapeConfigsForTest(got.ScrapeConfigs)
-		assert.Equal(collect, want_after.ScrapeConfigs, got.ScrapeConfigs)
-	}, time.Second*60, time.Millisecond*100)
+		assert.Equal(t, want_before.ScrapeConfigs, got.ScrapeConfigs)
+
+		tw.NamespaceSource.Modify(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "labellednamespace",
+			Labels: map[string]string{
+				"label2": "label2",
+			},
+		}})
+		synctest.Wait()
+		time.Sleep(eventInterval)
+		synctest.Wait()
+
+		got, err = tw.LoadConfig(context.Background())
+		assert.NoError(t, err)
+
+		sanitizeScrapeConfigsForTest(got.ScrapeConfigs)
+		assert.Equal(t, want_after.ScrapeConfigs, got.ScrapeConfigs)
+	})
+}
+
+// TestSecretInformerUpdatesStore verifies that when a secret is updated through the informer,
+// the asset store is automatically updated and LoadConfig reflects the new values.
+func TestSecretInformerUpdatesStore(t *testing.T) {
+	namespace := "test"
+	portName := "web"
+
+	sm := &monitoringv1.ServiceMonitor{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "auth",
+			Namespace: namespace,
+		},
+		Spec: monitoringv1.ServiceMonitorSpec{
+			JobLabel: "auth",
+			Endpoints: []monitoringv1.Endpoint{
+				{
+					Port: portName,
+					HTTPConfigWithProxyAndTLSFiles: monitoringv1.HTTPConfigWithProxyAndTLSFiles{
+						HTTPConfigWithTLSFiles: monitoringv1.HTTPConfigWithTLSFiles{
+							HTTPConfigWithoutTLS: monitoringv1.HTTPConfigWithoutTLS{
+								BasicAuth: &monitoringv1.BasicAuth{
+									Username: v1.SecretKeySelector{
+										LocalObjectReference: v1.LocalObjectReference{
+											Name: "basic-auth",
+										},
+										Key: "username",
+									},
+									Password: v1.SecretKeySelector{
+										LocalObjectReference: v1.LocalObjectReference{
+											Name: "basic-auth",
+										},
+										Key: "password",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			Selector: metav1.LabelSelector{},
+		},
+	}
+
+	cfg := allocatorconfig.Config{
+		PrometheusCR: allocatorconfig.PrometheusCRConfig{
+			ServiceMonitorSelector: &metav1.LabelSelector{},
+			PodMonitorSelector:     &metav1.LabelSelector{},
+		},
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		tw := newTestWatcher(t, cfg)
+		tw.ServiceMonitorSource.Add(sm)
+		defer tw.Close()
+
+		// Add initial secret to the metadata client's tracker so the informer can watch it
+		secretGVR := v1.SchemeGroupVersion.WithResource(string(v1.ResourceSecrets))
+		initialSecretMeta := &metav1.PartialObjectMetadata{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "v1",
+				Kind:       "Secret",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            "basic-auth",
+				Namespace:       namespace,
+				ResourceVersion: "1",
+			},
+		}
+		err := tw.MetadataClient.Tracker().Add(initialSecretMeta)
+		require.NoError(t, err)
+
+		events := make(chan Event, 1)
+		errors := make(chan error, 1)
+		eventInterval := 5 * time.Millisecond
+		tw.eventInterval = eventInterval
+
+		// Start Watch in a goroutine - this registers the secret informer event handlers
+		go func() {
+			watchErr := tw.Watch(events, errors)
+			require.NoError(t, watchErr)
+		}()
+
+		// Advance time past the informer sync polling period, then wait for the first event.
+		time.Sleep(watchSyncDuration)
+		synctest.Wait()
+		<-events
+
+		// Initial config should reflect the original secret values.
+		got, err := tw.LoadConfig(context.Background())
+		require.NoError(t, err)
+		require.NotEmpty(t, got.ScrapeConfigs)
+
+		var smSC *promconfig.ScrapeConfig
+		for _, sc := range got.ScrapeConfigs {
+			if sc.JobName == "serviceMonitor/test/auth/0" {
+				smSC = sc
+				break
+			}
+		}
+		require.NotNil(t, smSC)
+		require.NotNil(t, smSC.HTTPClientConfig.BasicAuth)
+		assert.Equal(t, "admin", smSC.HTTPClientConfig.BasicAuth.Username)
+		assert.Equal(t, config.Secret("password"), smSC.HTTPClientConfig.BasicAuth.Password)
+
+		// Update the k8sClient first (this is what the informer's UpdateFunc reads from)
+		updatedSecret := &v1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            "basic-auth",
+				Namespace:       namespace,
+				ResourceVersion: "2",
+			},
+			Data: map[string][]byte{
+				"username": []byte("newadmin"),
+				"password": []byte("newpassword"),
+			},
+		}
+		_, err = tw.k8sClient.CoreV1().Secrets(namespace).Update(context.Background(), updatedSecret, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		// Update the metadata client's tracker to trigger the informer's UpdateFunc
+		updatedSecretMeta := &metav1.PartialObjectMetadata{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: "v1",
+				Kind:       "Secret",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            "basic-auth",
+				Namespace:       namespace,
+				ResourceVersion: "2",
+			},
+		}
+		err = tw.MetadataClient.Tracker().Update(secretGVR, updatedSecretMeta, namespace)
+		require.NoError(t, err)
+
+		// Wait for the informer event to be processed
+		synctest.Wait()
+		time.Sleep(eventInterval)
+		synctest.Wait()
+
+		got, err = tw.LoadConfig(context.Background())
+		require.NoError(t, err)
+
+		smSC = nil
+		for _, sc := range got.ScrapeConfigs {
+			if sc.JobName == "serviceMonitor/test/auth/0" {
+				smSC = sc
+				break
+			}
+		}
+		require.NotNil(t, smSC)
+		require.NotNil(t, smSC.HTTPClientConfig.BasicAuth)
+		assert.Equal(t, "newadmin", smSC.HTTPClientConfig.BasicAuth.Username)
+		assert.Equal(t, config.Secret("newpassword"), smSC.HTTPClientConfig.BasicAuth.Password)
+	})
 }
 
 func TestRateLimit(t *testing.T) {
-	var err error
 	namespace := "test"
 	serviceMonitor := &monitoringv1.ServiceMonitor{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1089,116 +1490,154 @@ func TestRateLimit(t *testing.T) {
 			},
 		},
 	}
-	events := make(chan Event, 1)
-	eventInterval := 500 * time.Millisecond
-	cfg := allocatorconfig.Config{}
+	synctest.Test(t, func(t *testing.T) {
+		events := make(chan Event, 1)
+		eventInterval := 500 * time.Millisecond
+		cfg := allocatorconfig.Config{}
 
-	w, _ := getTestPrometheusCRWatcher(t, namespace, nil, nil, nil, nil, cfg)
-	defer w.Close()
-	w.eventInterval = eventInterval
+		tw := newTestWatcher(t, cfg)
+		defer tw.Close()
+		tw.eventInterval = eventInterval
 
-	go func() {
-		watchErr := w.Watch(events, make(chan error))
-		require.NoError(t, watchErr)
-	}()
-	// we don't have a simple way to wait for the watch to actually add event handlers to the informer,
-	// instead, we just update a ServiceMonitor periodically and wait until we get a notification
-	_, err = w.kubeMonitoringClient.MonitoringV1().ServiceMonitors("test").Create(context.Background(), serviceMonitor, metav1.CreateOptions{})
-	require.NoError(t, err)
+		go func() {
+			watchErr := tw.Watch(events, make(chan error))
+			require.NoError(t, watchErr)
+		}()
+		time.Sleep(watchSyncDuration)
+		synctest.Wait()
 
-	// wait for cache sync first
-	for _, informer := range w.informers {
-		success := cache.WaitForCacheSync(w.stopChannel, informer.HasSynced)
-		require.True(t, success)
-	}
+		tw.ServiceMonitorSource.Add(serviceMonitor)
+		synctest.Wait()
+		time.Sleep(eventInterval)
+		synctest.Wait()
+		<-events
 
-	require.Eventually(t, func() bool {
-		_, createErr := w.kubeMonitoringClient.MonitoringV1().ServiceMonitors("test").Update(context.Background(), serviceMonitor, metav1.UpdateOptions{})
-		if createErr != nil {
-			return false
-		}
-		select {
-		case <-events:
-			return true
-		default:
-			return false
-		}
-	}, time.Second*5, eventInterval/10)
+		// Send two updates and verify that the elapsed time is at least eventInterval
+		startTime := time.Now()
+		tw.ServiceMonitorSource.Modify(serviceMonitor)
+		synctest.Wait()
+		time.Sleep(eventInterval)
+		synctest.Wait()
+		<-events
 
-	// it's difficult to measure the rate precisely
-	// what we do, is send two updates, and then assert that the elapsed time is at least eventInterval
-	startTime := time.Now()
-	_, err = w.kubeMonitoringClient.MonitoringV1().ServiceMonitors("test").Update(context.Background(), serviceMonitor, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		select {
-		case <-events:
-			return true
-		default:
-			return false
-		}
-	}, time.Second*5, eventInterval/10)
-	_, err = w.kubeMonitoringClient.MonitoringV1().ServiceMonitors("test").Update(context.Background(), serviceMonitor, metav1.UpdateOptions{})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		select {
-		case <-events:
-			return true
-		default:
-			return false
-		}
-	}, time.Second*5, eventInterval/10)
-	elapsedTime := time.Since(startTime)
-	assert.Less(t, eventInterval, elapsedTime)
+		tw.ServiceMonitorSource.Modify(serviceMonitor)
+		synctest.Wait()
+		time.Sleep(eventInterval)
+		synctest.Wait()
+		<-events
+
+		elapsedTime := time.Since(startTime)
+		assert.Less(t, eventInterval, elapsedTime)
+	})
 }
 
-// getTestPrometheusCRWatcher creates a test instance of PrometheusCRWatcher with fake clients
-// and test secrets.
-func getTestPrometheusCRWatcher(
-	t *testing.T,
-	namespace string,
-	svcMonitors []*monitoringv1.ServiceMonitor,
-	podMonitors []*monitoringv1.PodMonitor,
-	probes []*monitoringv1.Probe,
-	scrapeConfigs []*promv1alpha1.ScrapeConfig,
-	cfg allocatorconfig.Config,
-) (*PrometheusCRWatcher, *fcache.FakeControllerSource) {
-	mClient := fakemonitoringclient.NewSimpleClientset()
-	for _, sm := range svcMonitors {
-		if sm != nil {
-			_, err := mClient.MonitoringV1().ServiceMonitors(sm.Namespace).Create(context.Background(), sm, metav1.CreateOptions{})
-			if err != nil {
-				t.Fatal(t, err)
-			}
-		}
-	}
-	for _, pm := range podMonitors {
-		if pm != nil {
-			_, err := mClient.MonitoringV1().PodMonitors(pm.Namespace).Create(context.Background(), pm, metav1.CreateOptions{})
-			if err != nil {
-				t.Fatal(t, err)
-			}
-		}
-	}
-	for _, prb := range probes {
-		if prb != nil {
-			_, err := mClient.MonitoringV1().Probes(prb.Namespace).Create(context.Background(), prb, metav1.CreateOptions{})
-			if err != nil {
-				t.Fatal(t, err)
-			}
-		}
+func TestDefaultDurations(t *testing.T) {
+	namespace := "test"
+	portName := "web"
+	tests := []struct {
+		name            string
+		serviceMonitors []*monitoringv1.ServiceMonitor
+		cfg             allocatorconfig.Config
+		expectedScrape  model.Duration
+		expectedEval    model.Duration
+	}{
+		{
+			name: "custom scrape and evaluation intervals",
+			serviceMonitors: []*monitoringv1.ServiceMonitor{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-sm",
+						Namespace: namespace,
+					},
+					Spec: monitoringv1.ServiceMonitorSpec{
+						JobLabel: "test",
+						Endpoints: []monitoringv1.Endpoint{
+							{
+								Port: portName,
+							},
+						},
+					},
+				},
+			},
+			cfg: allocatorconfig.Config{
+				PrometheusCR: allocatorconfig.PrometheusCRConfig{
+					ScrapeInterval:         model.Duration(120 * time.Second),
+					EvaluationInterval:     model.Duration(120 * time.Second),
+					ServiceMonitorSelector: &metav1.LabelSelector{},
+				},
+			},
+			expectedScrape: model.Duration(120 * time.Second),
+			expectedEval:   model.Duration(120 * time.Second),
+		},
+		{
+			name: "prometheus operator applies defaults when intervals nil",
+			serviceMonitors: []*monitoringv1.ServiceMonitor{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-sm",
+						Namespace: namespace,
+					},
+					Spec: monitoringv1.ServiceMonitorSpec{
+						JobLabel: "test",
+						Endpoints: []monitoringv1.Endpoint{
+							{
+								Port: portName,
+							},
+						},
+					},
+				},
+			},
+			cfg: allocatorconfig.Config{
+				PrometheusCR: allocatorconfig.PrometheusCRConfig{
+					ServiceMonitorSelector: &metav1.LabelSelector{},
+				},
+			},
+			expectedScrape: model.Duration(60 * time.Second),
+			expectedEval:   model.Duration(60 * time.Second),
+		},
 	}
 
-	for _, scc := range scrapeConfigs {
-		if scc != nil {
-			_, err := mClient.MonitoringV1alpha1().ScrapeConfigs(scc.Namespace).Create(context.Background(), scc, metav1.CreateOptions{})
-			if err != nil {
-				t.Fatal(t, err)
-			}
-		}
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				tw := newTestWatcher(t, tt.cfg)
+				for _, sm := range tt.serviceMonitors {
+					tw.ServiceMonitorSource.Add(sm)
+				}
+				defer tw.Close()
 
-	k8sClient := fake.NewSimpleClientset()
+				events := make(chan Event, 1)
+				eventInterval := 5 * time.Millisecond
+				tw.eventInterval = eventInterval
+
+				go func() {
+					watchErr := tw.Watch(events, make(chan error))
+					require.NoError(t, watchErr)
+				}()
+				time.Sleep(watchSyncDuration)
+				synctest.Wait()
+
+				got, err := tw.LoadConfig(context.Background())
+				assert.NoError(t, err)
+
+				assert.NotEmpty(t, got.ScrapeConfigs)
+
+				for _, sc := range got.ScrapeConfigs {
+					assert.Equal(t, tt.expectedScrape, sc.ScrapeInterval)
+				}
+				assert.Equal(t, tt.expectedEval, got.GlobalConfig.EvaluationInterval)
+			})
+		})
+	}
+}
+
+// newTestWatcher creates a testWatcher with fake sources for the given config.
+// Callers add resources to the returned sources (e.g. tw.ServiceMonitorSource.Add)
+// before starting informers.
+func newTestWatcher(t *testing.T, cfg allocatorconfig.Config) *testWatcher {
+	t.Helper()
+
+	k8sClient := fake.NewClientset()
 	_, err := k8sClient.CoreV1().Secrets("test").Create(context.Background(), &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "basic-auth",
@@ -1206,9 +1645,7 @@ func getTestPrometheusCRWatcher(
 		},
 		Data: map[string][]byte{"username": []byte("admin"), "password": []byte("password")},
 	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatal(t, err)
-	}
+	require.NoError(t, err)
 	_, err = k8sClient.CoreV1().Secrets("test").Create(context.Background(), &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "bearer",
@@ -1216,26 +1653,86 @@ func getTestPrometheusCRWatcher(
 		},
 		Data: map[string][]byte{"token": []byte("bearer-token")},
 	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatal(t, err)
+	require.NoError(t, err)
+
+	// newSource creates a FakeControllerSource and registers cleanup.
+	newSource := func() *fcache.FakeControllerSource {
+		s := fcache.NewFakeControllerSource()
+		t.Cleanup(func() { s.Broadcaster.Shutdown() })
+		return s
 	}
 
-	factory := informers.NewMonitoringInformerFactories(map[string]struct{}{v1.NamespaceAll: {}}, map[string]struct{}{}, mClient, 0, nil)
+	smSource := newSource()
+	pmSource := newSource()
+	probeSource := newSource()
+	scSource := newSource()
+	nsSource := newSource()
 
-	informers, err := getTestInformers(factory)
-	if err != nil {
-		t.Fatal(t, err)
+	// Build fake factories backed by the sources.
+	type gvrInfo struct {
+		gvr      schema.GroupVersionResource
+		source   *fcache.FakeControllerSource
+		exemplar runtime.Object
+	}
+	resources := []gvrInfo{
+		{monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ServiceMonitorName), smSource, &monitoringv1.ServiceMonitor{}},
+		{monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.PodMonitorName), pmSource, &monitoringv1.PodMonitor{}},
+		{monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ProbeName), probeSource, &monitoringv1.Probe{}},
+		{promv1alpha1.SchemeGroupVersion.WithResource(promv1alpha1.ScrapeConfigName), scSource, &promv1alpha1.ScrapeConfig{}},
+	}
+
+	sources := make(map[schema.GroupVersionResource]*fcache.FakeControllerSource, len(resources))
+	exemplars := make(map[schema.GroupVersionResource]runtime.Object, len(resources))
+	for _, r := range resources {
+		sources[r.gvr] = r.source
+		exemplars[r.gvr] = r.exemplar
+	}
+
+	fakeFactory := &fakeFactoriesForNamespaces{
+		sources:    sources,
+		exemplars:  exemplars,
+		namespaces: sets.New[string](v1.NamespaceAll),
+	}
+
+	// Create fake metadata client for secret informer.
+	mdScheme := metadatafake.NewTestScheme()
+	_ = metav1.AddMetaToScheme(mdScheme)
+	mdClient := metadatafake.NewSimpleMetadataClient(mdScheme)
+	metadataFactory := informers.NewMetadataInformerFactory(map[string]struct{}{v1.NamespaceAll: {}}, map[string]struct{}{}, mdClient, 1*time.Second, nil)
+
+	// Build informers via a for-range loop over name→GVR.
+	informerDefs := map[string]schema.GroupVersionResource{
+		monitoringv1.ServiceMonitorName: monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ServiceMonitorName),
+		monitoringv1.PodMonitorName:     monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.PodMonitorName),
+		monitoringv1.ProbeName:          monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ProbeName),
+		promv1alpha1.ScrapeConfigName:   promv1alpha1.SchemeGroupVersion.WithResource(promv1alpha1.ScrapeConfigName),
+	}
+	informersMap := make(map[string]*informers.ForResource, len(informerDefs)+1)
+	for name, gvr := range informerDefs {
+		inf, infErr := informers.NewInformersForResource(fakeFactory, gvr)
+		require.NoError(t, infErr)
+		informersMap[name] = inf
+	}
+	// Secret informer from metadata factory.
+	secretInformer, err := informers.NewInformersForResourceWithTransform(
+		metadataFactory,
+		v1.SchemeGroupVersion.WithResource(string(v1.ResourceSecrets)),
+		informers.PartialObjectMetadataStrip(operator.SecretGVK()),
+	)
+	require.NoError(t, err)
+	if secretInformer != nil {
+		informersMap[string(v1.ResourceSecrets)] = secretInformer
 	}
 
 	serviceDiscoveryRole := monitoringv1.ServiceDiscoveryRole("EndpointSlice")
 
 	prom := &monitoringv1.Prometheus{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
+			Namespace: "test",
 		},
 		Spec: monitoringv1.PrometheusSpec{
 			CommonPrometheusFields: monitoringv1.CommonPrometheusFields{
-				ScrapeInterval:                  monitoringv1.Duration("30s"),
+				ScrapeInterval:                  monitoringv1.Duration(cfg.PrometheusCR.ScrapeInterval.String()),
 				ServiceMonitorSelector:          cfg.PrometheusCR.ServiceMonitorSelector,
 				PodMonitorSelector:              cfg.PrometheusCR.PodMonitorSelector,
 				ServiceMonitorNamespaceSelector: cfg.PrometheusCR.ServiceMonitorNamespaceSelector,
@@ -1244,56 +1741,60 @@ func getTestPrometheusCRWatcher(
 				ProbeNamespaceSelector:          cfg.PrometheusCR.ProbeNamespaceSelector,
 				ScrapeConfigSelector:            cfg.PrometheusCR.ScrapeConfigSelector,
 				ScrapeConfigNamespaceSelector:   cfg.PrometheusCR.ScrapeConfigNamespaceSelector,
+				ScrapeClasses:                   cfg.PrometheusCR.ScrapeClasses,
 				ServiceDiscoveryRole:            &serviceDiscoveryRole,
 			},
-			EvaluationInterval: monitoringv1.Duration("30s"),
+			EvaluationInterval: monitoringv1.Duration(cfg.PrometheusCR.EvaluationInterval.String()),
 		},
 	}
 
 	promOperatorLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	generator, err := prometheus.NewConfigGenerator(promOperatorLogger, prom, prometheus.WithEndpointSliceSupport(), prometheus.WithInlineTLSConfig())
-	if err != nil {
-		t.Fatal(t, err)
-	}
+	require.NoError(t, err)
 
 	store := assets.NewStoreBuilder(k8sClient.CoreV1(), k8sClient.CoreV1())
 	promRegisterer := prometheusgoclient.NewRegistry()
 	operatorMetrics := operator.NewMetrics(promRegisterer)
-	recorderFactory := operator.NewEventRecorderFactory(false)
-	eventRecorder := recorderFactory(k8sClient, "target-allocator")
+	eventRecorder := operator.NewFakeRecorder(10, prom)
 
-	source := fcache.NewFakeControllerSource()
-	source.Add(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test"}})
-	source.Add(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{
+	nsSource.Add(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "test"}})
+	nsSource.Add(&v1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name: "labellednamespace",
 		Labels: map[string]string{
 			"label1": "label1",
-		}}})
+		},
+	}})
 
 	// create the shared informer and resync every 1s
-	nsMonInf := cache.NewSharedInformer(source, &v1.Namespace{}, 1*time.Second).(cache.SharedIndexInformer)
+	nsMonInf := cache.NewSharedInformer(nsSource, &v1.Namespace{}, 1*time.Second).(cache.SharedIndexInformer)
 
 	resourceSelector, err := prometheus.NewResourceSelector(promOperatorLogger, prom, store, nsMonInf, operatorMetrics, eventRecorder)
 	require.NoError(t, err)
 
-	return &PrometheusCRWatcher{
-		logger:                          slog.Default(),
-		kubeMonitoringClient:            mClient,
-		k8sClient:                       k8sClient,
-		informers:                       informers,
-		nsInformer:                      nsMonInf,
-		stopChannel:                     make(chan struct{}),
-		configGenerator:                 generator,
-		podMonitorNamespaceSelector:     cfg.PrometheusCR.PodMonitorNamespaceSelector,
-		serviceMonitorNamespaceSelector: cfg.PrometheusCR.ServiceMonitorNamespaceSelector,
-		probeNamespaceSelector:          cfg.PrometheusCR.ProbeNamespaceSelector,
-		scrapeConfigNamespaceSelector:   cfg.PrometheusCR.ScrapeConfigNamespaceSelector,
-		resourceSelector:                resourceSelector,
-		store:                           store,
-		prometheusCR:                    prom,
-	}, source
-
+	return &testWatcher{
+		PrometheusCRWatcher: &PrometheusCRWatcher{
+			logger:                          slog.Default(),
+			k8sClient:                       k8sClient,
+			informers:                       informersMap,
+			nsInformer:                      nsMonInf,
+			stopChannel:                     make(chan struct{}),
+			configGenerator:                 generator,
+			podMonitorNamespaceSelector:     cfg.PrometheusCR.PodMonitorNamespaceSelector,
+			serviceMonitorNamespaceSelector: cfg.PrometheusCR.ServiceMonitorNamespaceSelector,
+			probeNamespaceSelector:          cfg.PrometheusCR.ProbeNamespaceSelector,
+			scrapeConfigNamespaceSelector:   cfg.PrometheusCR.ScrapeConfigNamespaceSelector,
+			resourceSelector:                resourceSelector,
+			store:                           store,
+			prometheusCR:                    prom,
+		},
+		NamespaceSource:      nsSource,
+		ServiceMonitorSource: smSource,
+		PodMonitorSource:     pmSource,
+		ProbeSource:          probeSource,
+		ScrapeConfigSource:   scSource,
+		MetadataClient:       mdClient,
+	}
 }
 
 // Remove relable configs fields from scrape configs for testing,
@@ -1303,41 +1804,6 @@ func sanitizeScrapeConfigsForTest(scs []*promconfig.ScrapeConfig) {
 		sc.RelabelConfigs = nil
 		sc.MetricRelabelConfigs = nil
 	}
-}
-
-// getTestInformers creates informers for testing without CRD availability checks.
-func getTestInformers(factory informers.FactoriesForNamespaces) (map[string]*informers.ForResource, error) {
-	informersMap := make(map[string]*informers.ForResource)
-
-	// Create ServiceMonitor informers
-	serviceMonitorInformers, err := informers.NewInformersForResource(factory, monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ServiceMonitorName))
-	if err != nil {
-		return nil, err
-	}
-	informersMap[monitoringv1.ServiceMonitorName] = serviceMonitorInformers
-
-	// Create PodMonitor informers
-	podMonitorInformers, err := informers.NewInformersForResource(factory, monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.PodMonitorName))
-	if err != nil {
-		return nil, err
-	}
-	informersMap[monitoringv1.PodMonitorName] = podMonitorInformers
-
-	// Create Probe informers
-	probeInformers, err := informers.NewInformersForResource(factory, monitoringv1.SchemeGroupVersion.WithResource(monitoringv1.ProbeName))
-	if err != nil {
-		return nil, err
-	}
-	informersMap[monitoringv1.ProbeName] = probeInformers
-
-	// Create ScrapeConfig informers
-	scrapeConfigInformers, err := informers.NewInformersForResource(factory, promv1alpha1.SchemeGroupVersion.WithResource(promv1alpha1.ScrapeConfigName))
-	if err != nil {
-		return nil, err
-	}
-	informersMap[promv1alpha1.ScrapeConfigName] = scrapeConfigInformers
-
-	return informersMap, nil
 }
 
 // TestCRDAvailabilityChecks tests the CRDs' availability.
@@ -1368,7 +1834,7 @@ func TestCRDAvailabilityChecks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create fake discovery client
 			fakeDiscovery := &fakediscovery.FakeDiscovery{
-				Fake: &fake.NewSimpleClientset().Fake,
+				Fake: &fake.NewClientset().Fake,
 			}
 
 			// Set up resources
@@ -1407,13 +1873,7 @@ func TestCRDAvailabilityChecks(t *testing.T) {
 				available, err := checkCRDAvailability(fakeDiscovery, crd)
 				require.NoError(t, err)
 
-				expected := false
-				for _, expectedCRD := range tt.expectedCRDs {
-					if crd == expectedCRD {
-						expected = true
-						break
-					}
-				}
+				expected := slices.Contains(tt.expectedCRDs, crd)
 
 				assert.Equal(t, expected, available, "CRD %s availability should match expectation", crd)
 			}

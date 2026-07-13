@@ -5,6 +5,7 @@ package featuregate
 
 import (
 	"flag"
+	"fmt"
 
 	"go.opentelemetry.io/collector/featuregate"
 )
@@ -14,33 +15,13 @@ const (
 )
 
 var (
-	// EnableNativeSidecarContainers is the feature gate that controls whether a
-	// sidecar should be injected as a native sidecar or the classic way.
-	// Native sidecar containers have been available since kubernetes v1.28 in
-	// alpha and v1.29 in beta.
-	// It needs to be enabled with +featureGate=SidecarContainers.
-	// See:
-	// https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/#feature-gates-for-alpha-or-beta-features
-	EnableNativeSidecarContainers = featuregate.GlobalRegistry().MustRegister(
-		"operator.sidecarcontainers.native",
-		featuregate.StageBeta,
-		featuregate.WithRegisterDescription("controls whether the operator supports sidecar containers as init containers. Should only be enabled on k8s v1.29+"),
-		featuregate.WithRegisterFromVersion("v0.111.0"),
-	)
 	// SetGolangFlags is the feature gate that enables automatically setting GOMEMLIMIT and GOMAXPROCS for the
 	// collector, bridge, and target allocator.
 	SetGolangFlags = featuregate.GlobalRegistry().MustRegister(
 		"operator.golang.flags",
-		featuregate.StageAlpha,
+		featuregate.StageBeta,
 		featuregate.WithRegisterDescription("enables feature to set GOMEMLIMIT and GOMAXPROCS automatically"),
 		featuregate.WithRegisterFromVersion("v0.100.0"),
-	)
-	// EnableTargetAllocatorMTLS is the feature gate that enables mTLS between the target allocator and the collector.
-	EnableTargetAllocatorMTLS = featuregate.GlobalRegistry().MustRegister(
-		"operator.targetallocator.mtls",
-		featuregate.StageAlpha,
-		featuregate.WithRegisterDescription("enables mTLS between the target allocator and the collector"),
-		featuregate.WithRegisterFromVersion("v0.111.0"),
 	)
 	// EnableTargetAllocatorFallbackStrategy is the feature gate that enables consistent-hashing as the fallback
 	// strategy for allocation strategies that might not assign all jobs (per-node).
@@ -49,13 +30,6 @@ var (
 		featuregate.StageAlpha,
 		featuregate.WithRegisterDescription("enables fallback allocation strategy for the target allocator"),
 		featuregate.WithRegisterFromVersion("v0.114.0"),
-	)
-	// EnableConfigDefaulting is the feature gate that enables the operator to default the endpoint for known components.
-	EnableConfigDefaulting = featuregate.GlobalRegistry().MustRegister(
-		"operator.collector.default.config",
-		featuregate.StageBeta,
-		featuregate.WithRegisterDescription("enables the operator to default the endpoint for known components"),
-		featuregate.WithRegisterFromVersion("v0.110.0"),
 	)
 	// EnableOperatorNetworkPolicy is the feature gate that enables the operator to create network policies for the operator.
 	EnableOperatorNetworkPolicy = featuregate.GlobalRegistry().MustRegister(
@@ -70,6 +44,26 @@ var (
 		featuregate.StageAlpha,
 		featuregate.WithRegisterDescription("enables the operator to create network policies for operands,  collector and target allocator are supported"),
 	)
+	// EnableClusterObservability is the feature gate that enables the ClusterObservability controller.
+	EnableClusterObservability = featuregate.GlobalRegistry().MustRegister(
+		"operator.clusterobservability",
+		featuregate.StageAlpha,
+		featuregate.WithRegisterDescription("enables the ClusterObservability controller for managed observability deployment"),
+		featuregate.WithRegisterFromVersion("v0.134.0"),
+	)
+	// UseCollectorDefaultTelemetryShape, when enabled (default at beta), makes
+	// the operator-injected Prometheus telemetry reader use collector defaults
+	// for without_type_suffix, without_units, and without_scope_info — metric
+	// names emitted by operator-managed collectors no longer carry type
+	// suffixes, units, or scope_info. When disabled, the operator explicitly
+	// sets all three to false to preserve the pre-v0.154.0 metric name shape.
+	// See open-telemetry/opentelemetry-operator#5075.
+	UseCollectorDefaultTelemetryShape = featuregate.GlobalRegistry().MustRegister(
+		"operator.collector.usedefaulttelemetryshape",
+		featuregate.StageBeta,
+		featuregate.WithRegisterDescription("when enabled (default), the operator-injected Prometheus telemetry reader uses collector defaults for without_type_suffix/without_units/without_scope_info. When disabled, the operator explicitly sets all three to false to preserve the pre-v0.154.0 metric name shape."),
+		featuregate.WithRegisterFromVersion("v0.152.0"),
+	)
 )
 
 // Flags creates a new FlagSet that represents the available featuregate flags using the supplied featuregate registry.
@@ -77,4 +71,25 @@ func Flags(reg *featuregate.Registry) *flag.FlagSet {
 	flagSet := new(flag.FlagSet)
 	reg.RegisterFlags(flagSet)
 	return flagSet
+}
+
+// ApplyFeatureGateOverrides applies feature gate configuration from a comma-separated string.
+// Format matches CLI flag: "gate1,gate2,-gate3" where - prefix disables the gate.
+// This is needed because feature gates are stored in GlobalRegistry(), not in Config struct.
+func ApplyFeatureGateOverrides(gates string) error {
+	if gates == "" {
+		return nil
+	}
+
+	// Create temporary FlagSet to apply feature gates
+	fs := flag.NewFlagSet("config-overrides", flag.ContinueOnError)
+	reg := featuregate.GlobalRegistry()
+	reg.RegisterFlags(fs)
+
+	// Apply the gates string to the global registry
+	if err := fs.Set(FeatureGatesFlag, gates); err != nil {
+		return fmt.Errorf("failed to apply feature gates: %w", err)
+	}
+
+	return nil
 }

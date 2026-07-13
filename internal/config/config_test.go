@@ -36,6 +36,7 @@ func TestToStringMap(t *testing.T) {
 		"enable-apache-httpd-instrumentation":     "false",
 		"enable-cr-metrics":                       "false",
 		"enable-dot-net-auto-instrumentation":     "false",
+		"enable-instrumentation-crds":             "false",
 		"enable-go-auto-instrumentation":          "false",
 		"enable-java-auto-instrumentation":        "false",
 		"enable-leader-election":                  "false",
@@ -43,22 +44,29 @@ func TestToStringMap(t *testing.T) {
 		"enable-nginx-auto-instrumentation":       "false",
 		"enable-node-js-auto-instrumentation":     "false",
 		"enable-python-auto-instrumentation":      "false",
+		"feature-gates":                           "",
 		"fips-disabled-components":                "",
 		"ignore-missing-collector-crds":           "true",
 		"metrics-addr":                            "",
+		"metrics-secure":                          "false",
+		"metrics-tls-cert-file":                   "",
+		"metrics-tls-key-file":                    "",
 		"opampbridge-availability":                "0",
 		"open-shift-routes-availability":          "0",
 		"openshift-create-dashboard":              "false",
 		"operator-op-amp-bridge-configmap-entry":  "foo.yaml",
 		"operatoropampbridge-image":               "",
+		"openshift-webhook-replicas":              "0",
 		"pprof-addr":                              "",
 		"health-probe-addr":                       "",
 		"prometheus-cr-availability":              "0",
 		"target-allocator-availability":           "0",
 		"target-allocator-configmap-entry":        "",
 		"targetallocator-image":                   "",
+		"watch-namespace":                         "",
 		"webhook-port":                            "0",
 		"enable-webhooks":                         "false",
+		"gateway-apis-availability":               "0",
 	}, cfg.ToStringMap())
 }
 
@@ -94,7 +102,6 @@ func TestApply(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.description, func(t *testing.T) {
-
 			if len(test.args) > 0 {
 				oldArgs := args
 				args = test.args
