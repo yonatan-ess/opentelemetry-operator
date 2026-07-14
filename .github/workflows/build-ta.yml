@@ -36,4 +36,4 @@ jobs:
           context: cmd/otel-allocator
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/yonatan-ess/target-allocator:0.138.0-identity-hash
+          tags: ghcr.io/yonatan-ess/target-allocator:0.156.0-identity-hash
