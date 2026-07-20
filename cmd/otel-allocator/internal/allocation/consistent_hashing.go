@@ -5,22 +5,14 @@ package allocation
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/buraksezer/consistent"
 	"github.com/cespare/xxhash/v2"
-	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/labels"
 
 	"github.com/open-telemetry/opentelemetry-operator/cmd/otel-allocator/internal/target"
 )
 
 const consistentHashingStrategyName = "consistent-hashing"
-
-// endpointKeySeparator delimits the components of the scrape-URL hash key. It
-// matches the separator Prometheus uses for label hashing and won't appear in
-// label names.
-const endpointKeySeparator = '\xff'
 
 type hasher struct{}
 
@@ -55,12 +47,24 @@ func (*consistentHashingStrategy) GetName() string {
 }
 
 func (s *consistentHashingStrategy) GetCollectorForTarget(collectors map[string]*Collector, item *target.Item) (*Collector, error) {
-	// This fork keys on the target's scrape URL (address, scheme, metrics path,
-	// and query params) instead of __address__ only, so endpoints sharing a
-	// host:port but differing by path or params spread across collectors. Only
-	// the URL labels are hashed, so changes to other, mutable labels (instance
-	// metadata, service-discovery annotations, etc.) do not move a target.
-	member := s.consistentHasher.LocateKey([]byte(endpointHashKey(item)))
+	// This fork keys on the target's full post-relabel identity (item.Hash():
+	// the relabeled label set plus job name, with __meta_* service-discovery
+	// labels already excluded) instead of __address__ only, so endpoints
+	// sharing a host:port but distinguished by any other label - a static
+	// `shard` label, __param_*, or metrics path - spread across collectors.
+	//
+	// __scheme__/__metrics_path__/__param_* are only visible here when a
+	// relabel_config writes them explicitly; ScrapeConfig-level metricsPath/
+	// params/scheme fields are merged by Prometheus's own scrape manager and
+	// never reach the allocator's labels at all, so this key can't spread
+	// targets whose only differentiator is one of those config-level fields.
+	//
+	// Labels promoted from SD metadata via relabeling (e.g. netbox_rack) are
+	// NOT excluded, unlike __meta_*-prefixed labels: if such a value can
+	// change for the same address over time, this reintroduces the churn the
+	// Jul-1 fix tried to avoid. Revisit with a job-scoped allow/deny-list if
+	// that turns out to matter in practice.
+	member := s.consistentHasher.LocateKey([]byte(item.Hash().String()))
 	collectorName := member.String()
 	collector, ok := collectors[collectorName]
 	if !ok {
@@ -85,26 +89,3 @@ func (s *consistentHashingStrategy) SetCollectors(collectors map[string]*Collect
 }
 
 func (*consistentHashingStrategy) SetFallbackStrategy(Strategy) {}
-
-// endpointHashKey builds a stable key from the parts that make up a target's
-// scrape URL: its address (item.TargetURL, the same value the address-only
-// strategy hashes), scheme, metrics path, and query params. Labels are read in
-// their (sorted) order, so the key is deterministic for a given endpoint.
-func endpointHashKey(item *target.Item) string {
-	ls := item.Labels
-	var sb strings.Builder
-	sb.WriteString(item.TargetURL)
-	sb.WriteByte(endpointKeySeparator)
-	sb.WriteString(ls.Get(model.SchemeLabel))
-	sb.WriteByte(endpointKeySeparator)
-	sb.WriteString(ls.Get(model.MetricsPathLabel))
-	ls.Range(func(l labels.Label) {
-		if strings.HasPrefix(l.Name, model.ParamLabelPrefix) {
-			sb.WriteByte(endpointKeySeparator)
-			sb.WriteString(l.Name)
-			sb.WriteByte('=')
-			sb.WriteString(l.Value)
-		}
-	})
-	return sb.String()
-}
