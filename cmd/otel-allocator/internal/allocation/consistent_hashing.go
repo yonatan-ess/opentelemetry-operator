@@ -47,8 +47,24 @@ func (*consistentHashingStrategy) GetName() string {
 }
 
 func (s *consistentHashingStrategy) GetCollectorForTarget(collectors map[string]*Collector, item *target.Item) (*Collector, error) {
-	hashKey := item.TargetURL
-	member := s.consistentHasher.LocateKey([]byte(hashKey))
+	// This fork keys on the target's full post-relabel identity (item.Hash():
+	// the relabeled label set plus job name, with __meta_* service-discovery
+	// labels already excluded) instead of __address__ only, so endpoints
+	// sharing a host:port but distinguished by any other label - a static
+	// `shard` label, __param_*, or metrics path - spread across collectors.
+	//
+	// __scheme__/__metrics_path__/__param_* are only visible here when a
+	// relabel_config writes them explicitly; ScrapeConfig-level metricsPath/
+	// params/scheme fields are merged by Prometheus's own scrape manager and
+	// never reach the allocator's labels at all, so this key can't spread
+	// targets whose only differentiator is one of those config-level fields.
+	//
+	// Labels promoted from SD metadata via relabeling (e.g. netbox_rack) are
+	// NOT excluded, unlike __meta_*-prefixed labels: if such a value can
+	// change for the same address over time, this reintroduces the churn the
+	// Jul-1 fix tried to avoid. Revisit with a job-scoped allow/deny-list if
+	// that turns out to matter in practice.
+	member := s.consistentHasher.LocateKey([]byte(item.Hash().String()))
 	collectorName := member.String()
 	collector, ok := collectors[collectorName]
 	if !ok {
